@@ -2,8 +2,8 @@ name: Binance MA Monitor
 
 on:
   schedule:
-    # 每小时运行一次 (UTC时间)
-    - cron: '0 * * * *'
+    # 每15分钟运行一次 (UTC时间)
+    - cron: '*/15 * * * *'
   workflow_dispatch: # 允许手动测试
 
 jobs:
