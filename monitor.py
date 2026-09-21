@@ -37,39 +37,40 @@ def get_top_100_symbols():
         return []
 
 def send_feishu(msg):
-    """发送飞书消息"""
+    """发送飞书消息（带错误日志）"""
     if not FEISHU_WEBHOOK:
         print("错误: 没有配置飞书 Webhook")
         return
     payload = {"msg_type": "text", "content": {"text": msg}}
     try:
-        requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
+        resp = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
+        if resp.status_code != 200:
+            print(f"飞书接口返回错误: {resp.text}")
+        else:
+            print("飞书消息发送成功")
     except Exception as e:
         print(f"飞书发送失败: {e}")
 
-def check_symbol(symbol, interval):
-    """通过 OKX 公开 API 获取 K 线数据"""
+def check_symbol(symbol, interval, alert_list):
+    """通过 OKX 公开 API 获取 K 线数据，将满足条件的加入列表"""
     okx_symbol = f"{symbol}-USDT"
     url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit=150"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10).json()
         if resp.get("code") != "0":
-            return  # 该币种在 OKX 不存在
+            return
         data = resp["data"]
         if not data:
             return
 
-        # OKX 返回格式：ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm
         df = pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"])
         for col in ["open", "high", "low", "close"]:
             df[col] = pd.to_numeric(df[col])
-        # OKX 是最新数据在前，需反转
         df = df.iloc[::-1].reset_index(drop=True)
         close = df["close"]
     except Exception as e:
         return
 
-    # 计算 3 条 EMA 和 3 条 SMA
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     ema60 = close.ewm(span=60, adjust=False).mean().iloc[-1]
     ema120 = close.ewm(span=120, adjust=False).mean().iloc[-1]
@@ -82,10 +83,8 @@ def check_symbol(symbol, interval):
     max_spread = (max(mas) - min(mas)) / price
 
     if max_spread <= THRESHOLD:
-        # 消息内必须包含“警报”两个字（飞书安全设置要求）
-        msg = f"🚨 六线粘合警报!\n币种: {symbol}\n周期: {interval}\n价差: {max_spread:.4%}\n当前价: {price}"
-        send_feishu(msg)
-        print(f"发送警报: {symbol} {interval}")
+        # 不再单独发送，而是加入列表
+        alert_list.append(f"{symbol} [{interval}] 价差:{max_spread:.2%} 当前价:{price}")
 
 if __name__ == "__main__":
     if not FEISHU_WEBHOOK:
@@ -97,7 +96,27 @@ if __name__ == "__main__":
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
             print(f"本次监控币种数量: {len(symbols)}")
+            
+            # 用来装所有满足条件的警报
+            alert_list = []
+            
             for sym in symbols:
                 for iv in INTERVALS:
-                    check_symbol(sym, iv)
+                    check_symbol(sym, iv, alert_list)
                     time.sleep(0.1)
+            
+            # 跑完之后，检查有没有警报
+            if alert_list:
+                header = "🚨 六线粘合警报汇总!\n"
+                # 一条消息最多发几百个币，飞书限制大概在5000字以内，超了截断
+                body = "\n".join(alert_list)
+                full_msg = header + body
+                
+                # 控制字数，防止超过飞书上限
+                if len(full_msg) > 3000:
+                    full_msg = full_msg[:3000] + "\n... (消息过长，已截断)"
+                
+                send_feishu(full_msg)
+                print(f"本次共发送 {len(alert_list)} 个警报")
+            else:
+                print("本次没有发现满足条件的币种。")
