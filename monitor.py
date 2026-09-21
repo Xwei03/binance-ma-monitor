@@ -94,8 +94,8 @@ if __name__ == "__main__":
         if not symbols:
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
-            # 屏蔽稳定币黑名单
-            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD"]
+            # 屏蔽稳定币黑名单（包含新加入的 USAT）
+            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT"]
             symbols = [sym for sym in symbols if sym not in excluded_symbols]
             
             print(f"本次监控币种数量: {len(symbols)}")
