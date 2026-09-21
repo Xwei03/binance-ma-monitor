@@ -3,13 +3,14 @@ import time
 import requests
 import pandas as pd
 
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# 从 GitHub Secrets 读取密钥
+FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 
-INTERVALS = ["15m", "30m", "1h", "4h", "1d"]
-THRESHOLD = 0.01
+# 监控的周期（OKX支持这些周期）
+INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
+# 粘合阈值 (1% 即 0.01) —— 测试飞书时改成 100，测完必须改回 0.01！
+THRESHOLD = 100
 
-# 伪装浏览器请求头，尽力绕过币安对 GitHub IP 的拦截
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json",
@@ -17,58 +18,58 @@ HEADERS = {
 }
 
 def get_top_100_symbols():
-    """纯动态获取币安成交额排名前100的 USDT 交易对（不写死任何币种）"""
+    """通过 CoinGecko 免费 API 动态获取市值前 100 的币种"""
     try:
-        url_ticker = "https://api.binance.com/api/v3/ticker/24hr"
-        resp_ticker = requests.get(url_ticker, headers=HEADERS, timeout=15).json()
-
-        if not isinstance(resp_ticker, list):
-            print(f"币安返回异常数据: {resp_ticker}")
+        url = (
+            "https://api.coingecko.com/api/v3/coins/markets"
+            "?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false"
+        )
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        data = resp.json()
+        if not isinstance(data, list):
+            print(f"CoinGecko 返回异常数据: {data}")
             return []
-
-        # 过滤：必须是 USDT 交易对，且排除杠杆代币（UP/DOWN/BULL/BEAR）
-        valid_tickers = [
-            item for item in resp_ticker
-            if item['symbol'].endswith('USDT')
-            and 'UP' not in item['symbol']
-            and 'DOWN' not in item['symbol']
-            and 'BULL' not in item['symbol']
-            and 'BEAR' not in item['symbol']
-        ]
-
-        # 按24小时成交额（quoteVolume）从大到小排序
-        valid_tickers.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
-
-        # 取前100名
-        top_100 = [item['symbol'] for item in valid_tickers[:100]]
-        return top_100
-
+        symbols = [item["symbol"].upper() for item in data if "symbol" in item]
+        symbols = list(dict.fromkeys(symbols)) # 去重
+        return symbols
     except Exception as e:
-        print(f"动态获取币种列表失败(可能是币安IP拦截): {e}")
+        print(f"动态获取币种列表失败: {e}")
         return []
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg}
+def send_feishu(msg):
+    """发送飞书消息"""
+    if not FEISHU_WEBHOOK:
+        print("错误: 没有配置飞书 Webhook")
+        return
+    payload = {"msg_type": "text", "content": {"text": msg}}
     try:
-        requests.post(url, json=payload, timeout=10)
+        requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
     except Exception as e:
-        print(f"发送失败: {e}")
+        print(f"飞书发送失败: {e}")
 
 def check_symbol(symbol, interval):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=150"
+    """通过 OKX 公开 API 获取 K 线数据"""
+    okx_symbol = f"{symbol}-USDT"
+    url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit=150"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10).json()
-        if not isinstance(resp, list): return
-        df = pd.DataFrame(resp, columns=[
-            'time','open','high','low','close','volume','close_time',
-            'qav','num','tbbav','tbqav','ignore'
-        ])
-        df['close'] = pd.to_numeric(df['close'])
-        close = df['close']
+        if resp.get("code") != "0":
+            return  # 该币种在 OKX 不存在
+        data = resp["data"]
+        if not data:
+            return
+
+        # OKX 返回格式：ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm
+        df = pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"])
+        for col in ["open", "high", "low", "close"]:
+            df[col] = pd.to_numeric(df[col])
+        # OKX 是最新数据在前，需反转
+        df = df.iloc[::-1].reset_index(drop=True)
+        close = df["close"]
     except Exception as e:
         return
 
+    # 计算 3 条 EMA 和 3 条 SMA
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     ema60 = close.ewm(span=60, adjust=False).mean().iloc[-1]
     ema120 = close.ewm(span=120, adjust=False).mean().iloc[-1]
@@ -81,19 +82,19 @@ def check_symbol(symbol, interval):
     max_spread = (max(mas) - min(mas)) / price
 
     if max_spread <= THRESHOLD:
+        # 消息内必须包含“警报”两个字（飞书安全设置要求）
         msg = f"🚨 六线粘合警报!\n币种: {symbol}\n周期: {interval}\n价差: {max_spread:.4%}\n当前价: {price}"
-        send_telegram(msg)
+        send_feishu(msg)
         print(f"发送警报: {symbol} {interval}")
 
 if __name__ == "__main__":
-    if not TOKEN or not CHAT_ID:
-        print("错误: 缺少 Bot Token 或 Chat ID")
+    if not FEISHU_WEBHOOK:
+        print("错误: 缺少飞书 Webhook")
     else:
-        print("正在动态获取币安前100活跃币种...")
+        print("正在通过 CoinGecko 动态获取市值前 100 币种...")
         symbols = get_top_100_symbols()
-        
         if not symbols:
-            print("⚠️ 动态获取失败（被币安拦截），本次运行跳过，不使用备用列表。")
+            print("⚠️ 动态获取失败，跳过本次运行。")
         else:
             print(f"本次监控币种数量: {len(symbols)}")
             for sym in symbols:
