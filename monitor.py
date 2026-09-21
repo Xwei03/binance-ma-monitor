@@ -17,12 +17,12 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-def get_top_100_symbols():
-    """通过 CoinGecko 免费 API 动态获取市值前 100 的币种"""
+def get_top_200_symbols():
+    """通过 CoinGecko 免费 API 动态获取市值前 200 的币种"""
     try:
         url = (
             "https://api.coingecko.com/api/v3/coins/markets"
-            "?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false"
+            "?vs_currency=usd&order=market_cap_desc&per_page=200&page=1&sparkline=false"
         )
         resp = requests.get(url, headers=HEADERS, timeout=15)
         data = resp.json()
@@ -89,12 +89,12 @@ if __name__ == "__main__":
     if not FEISHU_WEBHOOK:
         print("错误: 缺少飞书 Webhook")
     else:
-        print("正在通过 CoinGecko 动态获取市值前 100 币种...")
-        symbols = get_top_100_symbols()
+        print("正在通过 CoinGecko 动态获取市值前 200 币种...")
+        symbols = get_top_200_symbols()
         if not symbols:
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
-            # 屏蔽稳定币黑名单（避免它们一直触发无用的粘合警报）
+            # 屏蔽稳定币黑名单
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD"]
             symbols = [sym for sym in symbols if sym not in excluded_symbols]
             
