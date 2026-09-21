@@ -9,7 +9,7 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期（OKX支持这些周期）
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 # 粘合阈值 (0.003 相当于 99.7% 重合度)
-THRESHOLD = 0.002
+THRESHOLD = 0.001.8
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -27,13 +27,27 @@ def get_top_200_symbols():
         resp = requests.get(url, headers=HEADERS, timeout=15)
         data = resp.json()
         if not isinstance(data, list):
-            print(f"CoinGecko 返回异常数据: {data}")
             return []
         symbols = [item["symbol"].upper() for item in data if "symbol" in item]
-        symbols = list(dict.fromkeys(symbols)) # 去重
+        symbols = list(dict.fromkeys(symbols))
         return symbols
     except Exception as e:
         print(f"动态获取币种列表失败: {e}")
+        return []
+
+def get_binance_symbols():
+    """尝试获取币安所有USDT交易对名单，用于过滤只监控币安有的币"""
+    try:
+        url = "https://api.binance.com/api/v3/exchangeInfo"
+        resp = requests.get(url, headers=HEADERS, timeout=10).json()
+        binance_list = [
+            s["symbol"] for s in resp["symbols"]
+            if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
+        ]
+        print("✅ 成功获取币安交易对名单")
+        return binance_list
+    except Exception as e:
+        print("⚠️ 币安IP拦截，智能降级使用OKX数据")
         return []
 
 def send_feishu(msg):
@@ -51,9 +65,14 @@ def send_feishu(msg):
     except Exception as e:
         print(f"飞书发送失败: {e}")
 
-def check_symbol(symbol, interval, alert_list):
+def check_symbol(symbol, interval, alert_list, binance_pairs):
     """通过 OKX 公开 API 获取 K 线数据"""
     okx_symbol = f"{symbol}-USDT"
+    
+    # 过滤逻辑：如果拿到了币安名单，且这个币不在币安里，就直接跳过
+    if binance_pairs and okx_symbol not in binance_pairs:
+        return
+        
     url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit=150"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10).json()
@@ -94,7 +113,10 @@ if __name__ == "__main__":
         if not symbols:
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
-            # 屏蔽稳定币黑名单（包含新加入的 USAT）
+            # 尝试获取币安名单
+            binance_pairs = get_binance_symbols()
+            
+            # 屏蔽稳定币黑名单
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT"]
             symbols = [sym for sym in symbols if sym not in excluded_symbols]
             
@@ -102,7 +124,7 @@ if __name__ == "__main__":
             alert_list = []
             for sym in symbols:
                 for iv in INTERVALS:
-                    check_symbol(sym, iv, alert_list)
+                    check_symbol(sym, iv, alert_list, binance_pairs)
                     time.sleep(0.1)
             
             if alert_list:
