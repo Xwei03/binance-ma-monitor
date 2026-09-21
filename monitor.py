@@ -8,7 +8,7 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 
 # 监控的周期（OKX支持这些周期）
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
-# 粘合阈值 (1% 即 0.01)
+# 粘合阈值 (0.003 相当于 99.7% 重合度)
 THRESHOLD = 0.002
 
 HEADERS = {
@@ -52,7 +52,7 @@ def send_feishu(msg):
         print(f"飞书发送失败: {e}")
 
 def check_symbol(symbol, interval, alert_list):
-    """通过 OKX 公开 API 获取 K 线数据，将满足条件的加入列表"""
+    """通过 OKX 公开 API 获取 K 线数据"""
     okx_symbol = f"{symbol}-USDT"
     url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit=150"
     try:
@@ -94,6 +94,10 @@ if __name__ == "__main__":
         if not symbols:
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
+            # 屏蔽稳定币黑名单（避免它们一直触发无用的粘合警报）
+            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD"]
+            symbols = [sym for sym in symbols if sym not in excluded_symbols]
+            
             print(f"本次监控币种数量: {len(symbols)}")
             alert_list = []
             for sym in symbols:
