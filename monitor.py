@@ -1,5 +1,6 @@
 import os
 import time
+import datetime
 import requests
 import pandas as pd
 
@@ -9,13 +10,9 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】（动态自适应会在此范围内浮动）
+# 【基础备用阈值】
 THRESHOLD_CONFIG = {
-    "15m": 0.003, # 15分钟用 0.3%
-    "30m": 0.003, # 30分钟用 0.3%
-    "1H": 0.005,  # 1小时用 0.5%
-    "4H": 0.015,  # 4小时用 1.5%
-    "1D": 0.032   # 1天用 3.2%
+    "15m": 0.003, "30m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.032
 }
 
 HEADERS = {
@@ -23,6 +20,30 @@ HEADERS = {
     "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+def is_time_to_check(interval):
+    """根据UTC时间，判断当前周期是否应该检查（防止大周期重复警报）"""
+    now = datetime.datetime.utcnow()
+    minute = now.minute
+    hour = now.hour
+    
+    # GitHub Actions 可能会延迟几分钟，我们使用 < 15 分钟作为安全窗口
+    if interval == "1D":
+        # 每天 UTC 00:00 检查（北京时间 08:00）
+        return hour == 0 and minute < 15
+    elif interval == "4H":
+        # 每 4 小时检查（UTC 00, 04, 08, 12, 16, 20）
+        return hour % 4 == 0 and minute < 15
+    elif interval == "1H":
+        # 每小时检查
+        return minute < 15
+    elif interval == "30m":
+        # 每 30 分钟检查（整点和半点）
+        return minute < 15 or (30 <= minute < 45)
+    elif interval == "15m":
+        # 15分钟周期始终检查（因为 cron 就是每15分钟跑一次）
+        return True
+    return True
 
 def get_coingecko_symbols():
     """动态获取前1000个币种作为候选池"""
@@ -57,15 +78,10 @@ def get_okx_swap_symbols():
 def send_feishu(msg):
     """发送飞书消息"""
     if not FEISHU_WEBHOOK:
-        print("错误: 没有配置飞书 Webhook")
         return
     payload = {"msg_type": "text", "content": {"text": msg}}
     try:
-        resp = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
-        if resp.status_code != 200:
-            print(f"飞书接口返回错误: {resp.text}")
-        else:
-            print("飞书消息发送成功")
+        requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
     except Exception as e:
         print(f"飞书发送失败: {e}")
 
@@ -88,7 +104,7 @@ def check_symbol(symbol, interval, alert_list):
     kline_data = None
     data_source = "OKX合约"
     
-    # 1. 尝试币安合约（币安可能会拦截GitHub IP，拦截后会自动降级）
+    # 1. 尝试币安合约
     binance_interval = interval.lower()
     binance_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={binance_swap_symbol}&interval={binance_interval}&limit=300"
     try:
@@ -123,11 +139,10 @@ def check_symbol(symbol, interval, alert_list):
             
         for col in ["open", "high", "low", "close"]:
             df[col] = pd.to_numeric(df[col])
-    except Exception as e:
-        print(f"数据解析失败: {e}")
+    except Exception:
         return
 
-    # 流动性过滤（低于1000万USDT直接跳过，防止垃圾币假信号）
+    # 流动性过滤
     try:
         recent_24h_vol = vol_series.tail(96).sum()
         if recent_24h_vol < 10000000:
@@ -135,19 +150,19 @@ def check_symbol(symbol, interval, alert_list):
     except Exception:
         pass
 
-    # 剔除最新一根未收盘K线，防止盘中假信号
+    # 剔除最新一根未收盘K线
     close = df["close"].iloc[:-1]
     high_series = df['high'].iloc[:-1]
     low_series = df['low'].iloc[:-1]
 
-    # 计算各条均线
+    # 计算均线
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     ema60 = close.ewm(span=60, adjust=False).mean().iloc[-1]
     ema120 = close.ewm(span=120, adjust=False).mean().iloc[-1]
     sma20 = close.rolling(20).mean().iloc[-1]
     sma60 = close.rolling(60).mean().iloc[-1]
     sma120 = close.rolling(120).mean().iloc[-1]
-    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1] # 大趋势线
+    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
 
     mas = [ema20, ema60, ema120, sma20, sma60, sma120]
     price = close.iloc[-1]
@@ -155,7 +170,7 @@ def check_symbol(symbol, interval, alert_list):
     diff_value = max(mas) - min(mas)
     max_spread = diff_value / price
     
-    # 动态自适应阈值计算
+    # 动态自适应阈值
     try:
         prev_close = df['close'].shift(1).iloc[:-1]
         tr = pd.concat([high_series - low_series, (high_series - prev_close).abs(), (low_series - prev_close).abs()], axis=1).max(axis=1)
@@ -219,7 +234,6 @@ if __name__ == "__main__":
         if not all_symbols or not okx_swap_coins:
             print("⚠️ 获取失败，跳过本次运行。")
         else:
-            # 过滤稳定币、NFT等
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "NFT", "AINFT"]
             
             final_monitored = []
@@ -235,8 +249,10 @@ if __name__ == "__main__":
             alert_list = []
             for sym in final_monitored:
                 for iv in INTERVALS:
-                    check_symbol(sym, iv, alert_list)
-                    time.sleep(0.1)
+                    # 【核心】只在对应周期收盘的时间窗口内才检查，彻底解决重复警报问题
+                    if is_time_to_check(iv):
+                        check_symbol(sym, iv, alert_list)
+                        time.sleep(0.1)
             
             if alert_list:
                 header = "🚨 六线粘合警报汇总(结构位计划)!\n"
