@@ -30,6 +30,9 @@ def get_top_200_symbols():
             return []
         symbols = [item["symbol"].upper() for item in data if "symbol" in item]
         symbols = list(dict.fromkeys(symbols))
+        # 确保黄金 PAXG 和 XAU 必定在监控列表里
+        if "PAXG" not in symbols: symbols.append("PAXG")
+        if "XAU" not in symbols: symbols.append("XAU")
         return symbols
     except Exception as e:
         print(f"动态获取币种列表失败: {e}")
@@ -51,53 +54,46 @@ def send_feishu(msg):
         print(f"飞书发送失败: {e}")
 
 def check_symbol(symbol, interval, alert_list):
-    """拿具体币种去问币安有没有，如果有就用币安K线，如果被拒绝或没上，就转OKX"""
+    """拿具体币种去查K线，实时计算差值"""
     okx_symbol = f"{symbol}-USDT"
     binance_symbol = f"{symbol}USDT"
     
     kline_data = None
-    data_source = "OKX (降级)"
+    data_source = "OKX"
     
-    # 1. 先尝试问币安要这个币的K线
+    # 1. 尝试币安
     binance_url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit=150"
     try:
         resp = requests.get(binance_url, headers=HEADERS, timeout=8).json()
-        # 如果币安返回的是列表（成功），说明币安有，且没被封
         if isinstance(resp, list):
             kline_data = resp
             data_source = "Binance"
-    except Exception as e:
+    except Exception:
         pass
         
-    # 2. 如果币安没给数据（币安没这个币，或者被封了），降级去拿 OKX
+    # 2. 降级 OKX
     if kline_data is None:
         okx_url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit=150"
         try:
             resp = requests.get(okx_url, headers=HEADERS, timeout=10).json()
             if resp.get("code") == "0" and resp.get("data"):
                 kline_data = resp["data"]
-        except Exception as e:
+        except Exception:
             return
 
-    # 3. 如果两个交易所都拿不到数据（说明币安和OKX都没有这个币），直接跳过
     if not kline_data:
         return
 
     try:
-        # 统一转换为 DataFrame
         if data_source == "Binance":
-            df = pd.DataFrame(kline_data, columns=[
-                'time','open','high','low','close','volume','close_time',
-                'qav','num','tbbav','tbqav','ignore'
-            ])
+            df = pd.DataFrame(kline_data, columns=['time','open','high','low','close','volume','close_time','qav','num','tbbav','tbqav','ignore'])
         else:
             df = pd.DataFrame(kline_data, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"])
-            df = df.iloc[::-1].reset_index(drop=True) # OKX 数据反转
-
+            df = df.iloc[::-1].reset_index(drop=True)
         for col in ["open", "high", "low", "close"]:
             df[col] = pd.to_numeric(df[col])
         close = df["close"]
-    except Exception as e:
+    except Exception:
         return
 
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
@@ -109,10 +105,13 @@ def check_symbol(symbol, interval, alert_list):
 
     mas = [ema20, ema60, ema120, sma20, sma60, sma120]
     price = close.iloc[-1]
-    max_spread = (max(mas) - min(mas)) / price
-
+    
+    diff_value = max(mas) - min(mas)
+    max_spread = diff_value / price
+    
+    # 【所有币种统一逻辑】只要触发阈值，警报里必定包含绝对差值和百分比价差
     if max_spread <= THRESHOLD:
-        alert_list.append(f"{symbol} [{interval}] 价差:{max_spread:.2%} 当前价:{price} ({data_source})")
+        alert_list.append(f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})")
 
 if __name__ == "__main__":
     if not FEISHU_WEBHOOK:
@@ -123,7 +122,6 @@ if __name__ == "__main__":
         if not symbols:
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
-            # 屏蔽稳定币黑名单
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT"]
             symbols = [sym for sym in symbols if sym not in excluded_symbols]
             
@@ -132,7 +130,7 @@ if __name__ == "__main__":
             for sym in symbols:
                 for iv in INTERVALS:
                     check_symbol(sym, iv, alert_list)
-                    time.sleep(0.15) # 稍微增加延时，防止请求过密
+                    time.sleep(0.1)
             
             if alert_list:
                 header = "🚨 六线粘合警报汇总!\n"
@@ -143,4 +141,4 @@ if __name__ == "__main__":
                 send_feishu(full_msg)
                 print(f"本次共发送 {len(alert_list)} 个警报")
             else:
-                print("本次没有发现满足条件的币种。")
+                print("本次没有满足粘合条件的币种。")
