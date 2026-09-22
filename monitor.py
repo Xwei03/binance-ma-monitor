@@ -17,25 +17,42 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-def get_top_200_symbols():
-    """通过 CoinGecko 免费 API 动态获取市值前 200 的币种"""
+def get_coingecko_symbols():
+    """动态获取前300个币种作为候选池，留出足够的顺延空间"""
+    symbols = []
     try:
-        url = (
-            "https://api.coingecko.com/api/v3/coins/markets"
-            "?vs_currency=usd&order=market_cap_desc&per_page=200&page=1&sparkline=false"
-        )
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        data = resp.json()
-        if not isinstance(data, list):
-            return []
-        symbols = [item["symbol"].upper() for item in data if "symbol" in item]
-        symbols = list(dict.fromkeys(symbols))
-        # 确保黄金 PAXG 和 XAU 必定在监控列表里
-        if "PAXG" not in symbols: symbols.append("PAXG")
-        if "XAU" not in symbols: symbols.append("XAU")
-        return symbols
+        # 抓取第1页（前250名）
+        url1 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false"
+        resp1 = requests.get(url1, headers=HEADERS, timeout=15).json()
+        if isinstance(resp1, list):
+            symbols.extend([item["symbol"].upper() for item in resp1 if "symbol" in item])
+
+        # 抓取第2页（第251-500名），以防第一页里没有合约的太多
+        url2 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2&sparkline=false"
+        resp2 = requests.get(url2, headers=HEADERS, timeout=15).json()
+        if isinstance(resp2, list):
+            symbols.extend([item["symbol"].upper() for item in resp2 if "symbol" in item])
+            
+        return list(dict.fromkeys(symbols)) # 去重
     except Exception as e:
         print(f"动态获取币种列表失败: {e}")
+        return []
+
+def get_okx_swap_symbols():
+    """获取 OKX 所有 USDT 永续合约名单"""
+    try:
+        url = "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+        resp = requests.get(url, headers=HEADERS, timeout=15).json()
+        swap_list = []
+        if resp.get("code") == "0":
+            for item in resp.get("data", []):
+                instId = item.get("instId", "")
+                if instId.endswith("-USDT-SWAP"):
+                    coin = instId.split("-")[0]
+                    swap_list.append(coin)
+        return list(set(swap_list))
+    except Exception as e:
+        print(f"获取 OKX 合约名单失败: {e}")
         return []
 
 def send_feishu(msg):
@@ -54,26 +71,26 @@ def send_feishu(msg):
         print(f"飞书发送失败: {e}")
 
 def check_symbol(symbol, interval, alert_list):
-    """拿具体币种去查K线，实时计算差值"""
-    okx_symbol = f"{symbol}-USDT"
-    binance_symbol = f"{symbol}USDT"
+    """只查合约K线：优先币安合约，降级OKX合约"""
+    okx_swap_symbol = f"{symbol}-USDT-SWAP"
+    binance_swap_symbol = f"{symbol}USDT"
     
     kline_data = None
-    data_source = "OKX"
+    data_source = "OKX合约"
     
-    # 1. 尝试币安
-    binance_url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit=150"
+    # 1. 尝试币安合约（fapi）
+    binance_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={binance_swap_symbol}&interval={interval}&limit=150"
     try:
         resp = requests.get(binance_url, headers=HEADERS, timeout=8).json()
-        if isinstance(resp, list):
+        if isinstance(resp, list) and len(resp) > 0:
             kline_data = resp
-            data_source = "Binance"
+            data_source = "Binance合约"
     except Exception:
         pass
         
-    # 2. 降级 OKX
+    # 2. 降级 OKX 合约
     if kline_data is None:
-        okx_url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit=150"
+        okx_url = f"https://www.okx.com/api/v5/market/candles?instId={okx_swap_symbol}&bar={interval}&limit=150"
         try:
             resp = requests.get(okx_url, headers=HEADERS, timeout=10).json()
             if resp.get("code") == "0" and resp.get("data"):
@@ -85,7 +102,7 @@ def check_symbol(symbol, interval, alert_list):
         return
 
     try:
-        if data_source == "Binance":
+        if data_source == "Binance合约":
             df = pd.DataFrame(kline_data, columns=['time','open','high','low','close','volume','close_time','qav','num','tbbav','tbqav','ignore'])
         else:
             df = pd.DataFrame(kline_data, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"])
@@ -109,7 +126,6 @@ def check_symbol(symbol, interval, alert_list):
     diff_value = max(mas) - min(mas)
     max_spread = diff_value / price
     
-    # 只要触发阈值，警报里必定包含“六线差值（美金）”、“价差百分比”、“当前价”
     if max_spread <= THRESHOLD:
         alert_list.append(f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})")
 
@@ -117,24 +133,41 @@ if __name__ == "__main__":
     if not FEISHU_WEBHOOK:
         print("错误: 缺少飞书 Webhook")
     else:
-        print("正在通过 CoinGecko 动态获取市值前 200 币种...")
-        symbols = get_top_200_symbols()
-        if not symbols:
-            print("⚠️ 动态获取失败，跳过本次运行。")
+        print("正在动态获取市值前 500 币种作为候选池...")
+        all_symbols = get_coingecko_symbols()
+        
+        print("正在获取 OKX 永续合约名单...")
+        swap_coins = get_okx_swap_symbols()
+        
+        if not all_symbols or not swap_coins:
+            print("⚠️ 获取币种或合约名单失败，跳过本次运行。")
         else:
-            # 屏蔽稳定币 + NFT/AINFT黑名单
-            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "AINFT"]
-            symbols = [sym for sym in symbols if sym not in excluded_symbols]
+            # 稳定币 + NFT/AINFT 黑名单
+            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "NFT", "AINFT"]
             
-            print(f"本次监控币种数量: {len(symbols)}")
+            # 【核心逻辑】顺延补足：只挑有合约的，直到凑够200个
+            final_monitored = []
+            for sym in all_symbols:
+                if sym in excluded_symbols:
+                    continue
+                if sym not in swap_coins:
+                    continue
+                final_monitored.append(sym)
+                if len(final_monitored) >= 200:
+                    break
+            
+            print(f"候选池币种总数量: {len(all_symbols)}")
+            print(f"OKX 合约总数量: {len(swap_coins)}")
+            print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
+            
             alert_list = []
-            for sym in symbols:
+            for sym in final_monitored:
                 for iv in INTERVALS:
                     check_symbol(sym, iv, alert_list)
                     time.sleep(0.1)
             
             if alert_list:
-                header = "🚨 六线粘合警报汇总!\n"
+                header = "🚨 六线粘合警报汇总(仅合约)!\n"
                 body = "\n".join(alert_list)
                 full_msg = header + body
                 if len(full_msg) > 3000:
@@ -142,4 +175,4 @@ if __name__ == "__main__":
                 send_feishu(full_msg)
                 print(f"本次共发送 {len(alert_list)} 个警报")
             else:
-                print("本次没有满足粘合条件的币种。")
+                print("本次没有满足粘合条件的合约币种。")
