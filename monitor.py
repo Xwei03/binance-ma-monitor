@@ -10,16 +10,13 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】1D已按你要求改为 0.035 (3.5%)
+# 【基础备用阈值】1D为 0.035 (3.5%)
 THRESHOLD_CONFIG = {
     "15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035
 }
 
-# 以当前价为锚点的止损距离（2.0倍ATR）
 SL_ATR_MULTIPLIER = 2.0
-# 保本触发距离（0.5倍ATR）
 BE_ATR_MULTIPLIER = 0.5
-# 异常K线影线阈值（超过2.0倍ATR视为插针假信号）
 SHADOW_ATR_MULTIPLIER = 2.0
 
 HEADERS = {
@@ -30,21 +27,29 @@ HEADERS = {
 
 def is_time_to_check(interval):
     """
-    根据用户要求：绝不跳单！
-    只要到了时间点，哪怕上一轮跑了很久，这一轮也必定检查。
+    【精准时间窗口】
+    根据K线收盘时间，严格限制各周期的检查窗口，避免重复警报。
     """
     now = datetime.datetime.utcnow()
+    minute = now.minute
     hour = now.hour
     
-    # 1D：只要在 UTC 0 点这个小时内触发，就必定检查（北京时间 8:00-8:59）
     if interval == "1D":
-        return hour == 0
-    # 4H：在 0,4,8,12,16,20 点的整个小时内触发，都必定检查
+        # 1天：只在 UTC 0点（北京时间8点）的 00分~15分内检查
+        return hour == 0 and minute < 15
     elif interval == "4H":
-        return hour % 4 == 0
-    # 15m, 30m, 1H：每次运行都必须检查，彻底杜绝漏单
-    else:
+        # 4小时：在 0,4,8,12,16,20 点的 00分~15分内检查
+        return hour % 4 == 0 and minute < 15
+    elif interval == "1H":
+        # 1小时：在每个整点的 00分~15分内检查
+        return minute < 15
+    elif interval == "30m":
+        # 30分钟：在 00分~15分 和 30分~45分 检查（即整点和半点收盘后）
+        return minute < 15 or (30 <= minute < 45)
+    elif interval == "15m":
+        # 15分钟：每次运行都必须检查（因为每次都有新的15分钟K线收盘）
         return True
+    return True
 
 def get_btc_trend():
     try:
@@ -55,10 +60,9 @@ def get_btc_trend():
             df = df.iloc[::-1].reset_index(drop=True)
             close = pd.to_numeric(df["close"])
             ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-            btc_price = close.iloc[-1]
-            return btc_price > ema200
-    except Exception as e:
-        print(f"获取BTC趋势失败: {e}")
+            return close.iloc[-1] > ema200
+    except Exception:
+        pass
     return True
 
 def get_funding_rate(okx_swap_symbol):
@@ -79,8 +83,8 @@ def get_coingecko_symbols():
             resp = requests.get(url, headers=HEADERS, timeout=15).json()
             if isinstance(resp, list):
                 symbols.extend([item["symbol"].upper() for item in resp if "symbol" in item])
-        except Exception as e:
-            print(f"获取第{page}页失败: {e}")
+        except Exception:
+            pass
     return list(dict.fromkeys(symbols))
 
 def get_okx_swap_symbols():
@@ -92,11 +96,9 @@ def get_okx_swap_symbols():
             for item in resp.get("data", []):
                 instId = item.get("instId", "")
                 if instId.endswith("-USDT-SWAP"):
-                    coin = instId.split("-")[0]
-                    swap_list.append(coin)
+                    swap_list.append(instId.split("-")[0])
         return list(set(swap_list))
-    except Exception as e:
-        print(f"获取 OKX 合约名单失败: {e}")
+    except Exception:
         return []
 
 def send_feishu(msg):
@@ -184,7 +186,6 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
     if max_spread <= threshold:
-        # 异常K线过滤
         last_open = df['open'].iloc[-2]
         last_close = df['close'].iloc[-2]
         last_high = df['high'].iloc[-2]
@@ -274,7 +275,6 @@ if __name__ == "__main__":
             
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
             
-            # 【核心修改】按周期分批发送，不再等全部跑完
             for iv in INTERVALS:
                 if not is_time_to_check(iv):
                     continue
@@ -285,7 +285,6 @@ if __name__ == "__main__":
                     check_symbol(sym, iv, btc_trend, period_alert_list)
                     time.sleep(0.15)
                 
-                # 如果这个周期有警报，立刻发送
                 if period_alert_list:
                     header = f"🚨 {iv} 周期六线粘合警报!\n"
                     body = "\n\n".join(period_alert_list)
