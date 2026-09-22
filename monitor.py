@@ -10,7 +10,7 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】30分钟已改为 0.004 (0.4%)
+# 【基础备用阈值】1D已按你要求改为 0.035 (3.5%)
 THRESHOLD_CONFIG = {
     "15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035
 }
@@ -30,13 +30,13 @@ HEADERS = {
 
 def is_time_to_check(interval):
     """
-    【核心修改】根据用户要求：绝不跳单！
+    根据用户要求：绝不跳单！
     只要到了时间点，哪怕上一轮跑了很久，这一轮也必定检查。
     """
     now = datetime.datetime.utcnow()
     hour = now.hour
     
-    # 1D：只要在 UTC 0 点这个小时内触发，就必定检查（覆盖北京时间 8:00-8:59）
+    # 1D：只要在 UTC 0 点这个小时内触发，就必定检查（北京时间 8:00-8:59）
     if interval == "1D":
         return hour == 0
     # 4H：在 0,4,8,12,16,20 点的整个小时内触发，都必定检查
@@ -194,7 +194,6 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         lower_shadow = min(last_open, last_close) - last_low
 
         if upper_shadow > SHADOW_ATR_MULTIPLIER * atr or lower_shadow > SHADOW_ATR_MULTIPLIER * atr:
-            print(f"⚠️ {symbol} [{interval}] 出现异常插针K线，已过滤（上影线:{upper_shadow:.4f}, 下影线:{lower_shadow:.4f}）")
             return
 
         resistance = high_series.tail(60).max()
@@ -229,18 +228,12 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         btc_note = ""
         if price > ema200:
             trend_desc = "📈 多头趋势 (价格 > EMA200)"
-            if btc_trend:
-                trade_note = "✅ 顺势，优先考虑做多"
-            else:
-                trade_note = "⚠️ 大盘偏空 (BTC < EMA200)，逆势做多风险大"
-                btc_note = " (BTC警告)"
+            trade_note = "✅ 顺势，优先考虑做多" if btc_trend else "⚠️ 大盘偏空 (BTC < EMA200)，逆势做多风险大"
+            if not btc_trend: btc_note = " (BTC警告)"
         else:
             trend_desc = "📉 空头趋势 (价格 < EMA200)"
-            if not btc_trend:
-                trade_note = "✅ 顺势，优先考虑做空"
-            else:
-                trade_note = "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大"
-                btc_note = " (BTC警告)"
+            trade_note = "✅ 顺势，优先考虑做空" if not btc_trend else "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大"
+            if btc_trend: btc_note = " (BTC警告)"
         
         trade_advice = (
             f"📈 做多: 止损 ${long_sl:.4f} / 止盈 ${long_tp:.4f} (RR: {long_rr:.2f}) {long_tag}\n"
@@ -263,7 +256,6 @@ if __name__ == "__main__":
     else:
         print("正在获取 BTC 大盘趋势...")
         btc_trend = get_btc_trend()
-        print(f"BTC大盘趋势: {'多头' if btc_trend else '空头'}")
         
         print("正在动态获取候选池与合约名单...")
         all_symbols = get_coingecko_symbols()
@@ -281,21 +273,26 @@ if __name__ == "__main__":
                 if len(final_monitored) >= 200: break
             
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
-            alert_list = []
-            for sym in final_monitored:
-                for iv in INTERVALS:
-                    if is_time_to_check(iv):
-                        check_symbol(sym, iv, btc_trend, alert_list)
-                        time.sleep(0.2) # 稍微增加延时，防止请求过于频繁
             
-            if alert_list:
-                # 头部加上防重复提示，避免用户误解
-                header = "🚨 六线粘合警报汇总(合约终极版)!\n(注：为避免漏单，同一K线可能重复提醒，请以首次为准)\n"
-                body = "\n\n".join(alert_list)
-                full_msg = header + body
-                if len(full_msg) > 3000:
-                    full_msg = full_msg[:3000] + "\n... (消息过长，已截断)"
-                send_feishu(full_msg)
-                print(f"本次共发送 {len(alert_list)} 个警报")
-            else:
-                print("本次没有满足粘合条件的合约币种。")
+            # 【核心修改】按周期分批发送，不再等全部跑完
+            for iv in INTERVALS:
+                if not is_time_to_check(iv):
+                    continue
+                
+                print(f"正在检查周期: {iv}...")
+                period_alert_list = []
+                for sym in final_monitored:
+                    check_symbol(sym, iv, btc_trend, period_alert_list)
+                    time.sleep(0.15)
+                
+                # 如果这个周期有警报，立刻发送
+                if period_alert_list:
+                    header = f"🚨 {iv} 周期六线粘合警报!\n"
+                    body = "\n\n".join(period_alert_list)
+                    full_msg = header + body
+                    if len(full_msg) > 3000:
+                        full_msg = full_msg[:3000] + "\n... (消息过长，已截断)"
+                    send_feishu(full_msg)
+                    print(f"✅ {iv} 周期已发送 {len(period_alert_list)} 个警报")
+            
+            print("本次所有周期检查完毕。")
