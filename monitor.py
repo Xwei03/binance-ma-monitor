@@ -9,13 +9,9 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】（动态自适应会在此范围内浮动）
+# 【基础备用阈值】
 THRESHOLD_CONFIG = {
-    "15m": 0.003, # 15分钟用 0.3%
-    "30m": 0.003, # 30分钟用 0.3%
-    "1H": 0.005,  # 1小时用 0.5%
-    "4H": 0.015,  # 4小时用 1.5%
-    "1D": 0.032   # 1天用 3.2%
+    "15m": 0.003, "30m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.032
 }
 
 HEADERS = {
@@ -57,15 +53,12 @@ def get_okx_swap_symbols():
 def send_feishu(msg):
     """发送飞书消息"""
     if not FEISHU_WEBHOOK:
-        print("错误: 没有配置飞书 Webhook")
         return
     payload = {"msg_type": "text", "content": {"text": msg}}
     try:
         resp = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
         if resp.status_code != 200:
             print(f"飞书接口返回错误: {resp.text}")
-        else:
-            print("飞书消息发送成功")
     except Exception as e:
         print(f"飞书发送失败: {e}")
 
@@ -113,15 +106,14 @@ def check_symbol(symbol, interval, alert_list):
         for col in ["open", "high", "low", "close"]:
             df[col] = pd.to_numeric(df[col])
     except Exception as e:
-        print(f"数据解析失败: {e}")
         return
 
-    # 流动性过滤（低于1000万USDT直接跳过）
+    # 流动性过滤
     try:
         recent_24h_vol = vol_series.tail(96).sum()
         if recent_24h_vol < 10000000:
             return
-    except Exception as e:
+    except Exception:
         pass
 
     # 剔除最新一根未收盘K线
@@ -129,15 +121,13 @@ def check_symbol(symbol, interval, alert_list):
     high_series = df['high'].iloc[:-1]
     low_series = df['low'].iloc[:-1]
 
-    # 计算各条均线
+    # 计算均线
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     ema60 = close.ewm(span=60, adjust=False).mean().iloc[-1]
     ema120 = close.ewm(span=120, adjust=False).mean().iloc[-1]
     sma20 = close.rolling(20).mean().iloc[-1]
     sma60 = close.rolling(60).mean().iloc[-1]
     sma120 = close.rolling(120).mean().iloc[-1]
-    
-    # 计算 EMA200 大趋势线
     ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
 
     mas = [ema20, ema60, ema120, sma20, sma60, sma120]
@@ -146,7 +136,7 @@ def check_symbol(symbol, interval, alert_list):
     diff_value = max(mas) - min(mas)
     max_spread = diff_value / price
     
-    # 动态自适应阈值计算
+    # 动态自适应阈值
     try:
         prev_close = df['close'].shift(1).iloc[:-1]
         tr = pd.concat([high_series - low_series, (high_series - prev_close).abs(), (low_series - prev_close).abs()], axis=1).max(axis=1)
@@ -155,7 +145,7 @@ def check_symbol(symbol, interval, alert_list):
         dynamic_threshold = (atr / price) * 0.4
         base_threshold = THRESHOLD_CONFIG.get(interval, 0.004)
         threshold = max(min(dynamic_threshold, base_threshold * 2), base_threshold * 0.5)
-    except Exception as e:
+    except Exception:
         atr = diff_value
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
@@ -171,7 +161,7 @@ def check_symbol(symbol, interval, alert_list):
                 f"📈 做多建议: 止损 ${long_stop_loss:.4f} / 止盈 ${long_take_profit:.4f}\n"
                 f"📉 做空建议: 止损 ${short_stop_loss:.4f} / 止盈 ${short_take_profit:.4f}"
             )
-        except Exception as e:
+        except Exception:
             trade_advice = "⚠️ 止损止盈计算失败"
             
         # 趋势过滤标签
@@ -182,8 +172,17 @@ def check_symbol(symbol, interval, alert_list):
             trend_desc = f"📉 空头趋势 (价格 < EMA200)"
             trade_note = "⚠️ 逆势，注意风险，优先考虑做空"
             
+        # 【新增】计算近60根K线的支撑位和压力位
+        try:
+            resistance = high_series.tail(60).max()
+            support = low_series.tail(60).min()
+            sr_desc = f"🔴 压力位: ${resistance:.4f} / 🟢 支撑位: ${support:.4f}"
+        except Exception:
+            sr_desc = "⚠️ 支撑压力计算失败"
+            
         alert_list.append(
             f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})\n"
+            f"{sr_desc}\n"
             f"🧭 趋势状态: {trend_desc} ({trade_note})\n"
             f"{trade_advice}"
         )
@@ -192,14 +191,12 @@ if __name__ == "__main__":
     if not FEISHU_WEBHOOK:
         print("错误: 缺少飞书 Webhook")
     else:
-        print("正在动态获取市值前 1000 币种作为候选池...")
+        print("正在动态获取候选池与合约名单...")
         all_symbols = get_coingecko_symbols()
-        
-        print("正在获取 OKX 永续合约名单...")
         okx_swap_coins = get_okx_swap_symbols()
         
         if not all_symbols or not okx_swap_coins:
-            print("⚠️ 获取币种或 OKX 合约名单失败，跳过本次运行。")
+            print("⚠️ 获取失败，跳过本次运行。")
         else:
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "NFT", "AINFT"]
             
@@ -220,7 +217,7 @@ if __name__ == "__main__":
                     time.sleep(0.1)
             
             if alert_list:
-                header = "🚨 六线粘合警报汇总(带趋势过滤)!\n"
+                header = "🚨 六线粘合警报汇总(带支撑压力)!\n"
                 body = "\n\n".join(alert_list)
                 full_msg = header + body
                 if len(full_msg) > 3000:
