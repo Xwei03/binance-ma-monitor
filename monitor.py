@@ -9,9 +9,13 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】
+# 【基础备用阈值】（动态自适应会在此范围内浮动）
 THRESHOLD_CONFIG = {
-    "15m": 0.003, "30m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.032
+    "15m": 0.003, # 15分钟用 0.3%
+    "30m": 0.003, # 30分钟用 0.3%
+    "1H": 0.005,  # 1小时用 0.5%
+    "4H": 0.015,  # 4小时用 1.5%
+    "1D": 0.032   # 1天用 3.2%
 }
 
 HEADERS = {
@@ -53,14 +57,28 @@ def get_okx_swap_symbols():
 def send_feishu(msg):
     """发送飞书消息"""
     if not FEISHU_WEBHOOK:
+        print("错误: 没有配置飞书 Webhook")
         return
     payload = {"msg_type": "text", "content": {"text": msg}}
     try:
         resp = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
         if resp.status_code != 200:
             print(f"飞书接口返回错误: {resp.text}")
+        else:
+            print("飞书消息发送成功")
     except Exception as e:
         print(f"飞书发送失败: {e}")
+
+def get_rr_tag(rr):
+    """根据盈亏比生成评级标签"""
+    if rr >= 3:
+        return "🔥 极佳机会 (盈亏比≥3)"
+    elif rr >= 2:
+        return "✅ 优质机会 (盈亏比≥2)"
+    elif rr >= 1:
+        return "⚠️ 一般机会 (盈亏比≥1，谨慎)"
+    else:
+        return "❌ 盈亏比极差 (建议放弃)"
 
 def check_symbol(symbol, interval, alert_list):
     """只查合约K线：优先币安合约，降级OKX合约"""
@@ -70,7 +88,7 @@ def check_symbol(symbol, interval, alert_list):
     kline_data = None
     data_source = "OKX合约"
     
-    # 1. 尝试币安合约
+    # 1. 尝试币安合约（币安可能会拦截GitHub IP，拦截后会自动降级）
     binance_interval = interval.lower()
     binance_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={binance_swap_symbol}&interval={binance_interval}&limit=300"
     try:
@@ -106,9 +124,10 @@ def check_symbol(symbol, interval, alert_list):
         for col in ["open", "high", "low", "close"]:
             df[col] = pd.to_numeric(df[col])
     except Exception as e:
+        print(f"数据解析失败: {e}")
         return
 
-    # 流动性过滤
+    # 流动性过滤（低于1000万USDT直接跳过，防止垃圾币假信号）
     try:
         recent_24h_vol = vol_series.tail(96).sum()
         if recent_24h_vol < 10000000:
@@ -116,19 +135,19 @@ def check_symbol(symbol, interval, alert_list):
     except Exception:
         pass
 
-    # 剔除最新一根未收盘K线
+    # 剔除最新一根未收盘K线，防止盘中假信号
     close = df["close"].iloc[:-1]
     high_series = df['high'].iloc[:-1]
     low_series = df['low'].iloc[:-1]
 
-    # 计算均线
+    # 计算各条均线
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     ema60 = close.ewm(span=60, adjust=False).mean().iloc[-1]
     ema120 = close.ewm(span=120, adjust=False).mean().iloc[-1]
     sma20 = close.rolling(20).mean().iloc[-1]
     sma60 = close.rolling(60).mean().iloc[-1]
     sma120 = close.rolling(120).mean().iloc[-1]
-    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
+    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1] # 大趋势线
 
     mas = [ema20, ema60, ema120, sma20, sma60, sma120]
     price = close.iloc[-1]
@@ -136,7 +155,7 @@ def check_symbol(symbol, interval, alert_list):
     diff_value = max(mas) - min(mas)
     max_spread = diff_value / price
     
-    # 动态自适应阈值
+    # 动态自适应阈值计算
     try:
         prev_close = df['close'].shift(1).iloc[:-1]
         tr = pd.concat([high_series - low_series, (high_series - prev_close).abs(), (low_series - prev_close).abs()], axis=1).max(axis=1)
@@ -150,19 +169,29 @@ def check_symbol(symbol, interval, alert_list):
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
     if max_spread <= threshold:
-        # 计算止损止盈建议
-        try:
-            long_stop_loss = min(mas) - 0.5 * atr
-            long_take_profit = price + 2 * (price - long_stop_loss)
-            short_stop_loss = max(mas) + 0.5 * atr
-            short_take_profit = price - 2 * (short_stop_loss - price)
-            
-            trade_advice = (
-                f"📈 做多建议: 止损 ${long_stop_loss:.4f} / 止盈 ${long_take_profit:.4f}\n"
-                f"📉 做空建议: 止损 ${short_stop_loss:.4f} / 止盈 ${short_take_profit:.4f}"
-            )
-        except Exception:
-            trade_advice = "⚠️ 止损止盈计算失败"
+        # 计算近60根K线的支撑位和压力位
+        resistance = high_series.tail(60).max()
+        support = low_series.tail(60).min()
+        
+        # 基于支撑压力位计算止盈止损
+        long_sl = support - 0.5 * atr
+        long_tp = resistance
+        
+        short_sl = resistance + 0.5 * atr
+        short_tp = support
+        
+        # 计算盈亏比
+        long_rr = (long_tp - price) / (price - long_sl) if (price - long_sl) > 0 else 0
+        short_rr = (price - short_tp) / (short_sl - price) if (short_sl - price) > 0 else 0
+        
+        # 获取盈亏比评级
+        long_tag = get_rr_tag(long_rr)
+        short_tag = get_rr_tag(short_rr)
+        
+        trade_advice = (
+            f"📈 做多: 止损 ${long_sl:.4f} / 止盈 ${long_tp:.4f} (RR: {long_rr:.2f}) {long_tag}\n"
+            f"📉 做空: 止损 ${short_sl:.4f} / 止盈 ${short_tp:.4f} (RR: {short_rr:.2f}) {short_tag}"
+        )
             
         # 趋势过滤标签
         if price > ema200:
@@ -172,17 +201,9 @@ def check_symbol(symbol, interval, alert_list):
             trend_desc = f"📉 空头趋势 (价格 < EMA200)"
             trade_note = "⚠️ 逆势，注意风险，优先考虑做空"
             
-        # 【新增】计算近60根K线的支撑位和压力位
-        try:
-            resistance = high_series.tail(60).max()
-            support = low_series.tail(60).min()
-            sr_desc = f"🔴 压力位: ${resistance:.4f} / 🟢 支撑位: ${support:.4f}"
-        except Exception:
-            sr_desc = "⚠️ 支撑压力计算失败"
-            
         alert_list.append(
             f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})\n"
-            f"{sr_desc}\n"
+            f"🔴 压力位: ${resistance:.4f} / 🟢 支撑位: ${support:.4f}\n"
             f"🧭 趋势状态: {trend_desc} ({trade_note})\n"
             f"{trade_advice}"
         )
@@ -198,6 +219,7 @@ if __name__ == "__main__":
         if not all_symbols or not okx_swap_coins:
             print("⚠️ 获取失败，跳过本次运行。")
         else:
+            # 过滤稳定币、NFT等
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "NFT", "AINFT"]
             
             final_monitored = []
@@ -217,7 +239,7 @@ if __name__ == "__main__":
                     time.sleep(0.1)
             
             if alert_list:
-                header = "🚨 六线粘合警报汇总(带支撑压力)!\n"
+                header = "🚨 六线粘合警报汇总(结构位计划)!\n"
                 body = "\n\n".join(alert_list)
                 full_msg = header + body
                 if len(full_msg) > 3000:
