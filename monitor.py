@@ -109,7 +109,7 @@ def check_symbol(symbol, interval, alert_list):
     diff_value = max(mas) - min(mas)
     max_spread = diff_value / price
     
-    # 【所有币种统一逻辑】只要触发阈值，警报里必定包含绝对差值和百分比价差
+    # 只要触发阈值，警报里必定包含“六线差值（美金）”、“价差百分比”、“当前价”
     if max_spread <= THRESHOLD:
         alert_list.append(f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})")
 
@@ -122,7 +122,8 @@ if __name__ == "__main__":
         if not symbols:
             print("⚠️ 动态获取失败，跳过本次运行。")
         else:
-            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT"]
+            # 屏蔽稳定币 + NFT/元宇宙代币黑名单
+            excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "APE", "BLUR", "LOOKS", "XMON", "RARI", "NFT", "SAND", "MANA", "AXS", "GALA", "IMX", "ENJ", "GMT", "CHZ"]
             symbols = [sym for sym in symbols if sym not in excluded_symbols]
             
             print(f"本次监控币种数量: {len(symbols)}")
