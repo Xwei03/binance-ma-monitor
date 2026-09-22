@@ -9,7 +9,7 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期（OKX支持这些周期）
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 # 粘合阈值 (0.003 相当于 99.7% 重合度)
-THRESHOLD = 0.001
+THRESHOLD = 0.003
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
