@@ -15,6 +15,9 @@ THRESHOLD_CONFIG = {
     "15m": 0.003, "30m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.032
 }
 
+# 以当前价为锚点的止损距离（1.5倍ATR）
+SL_ATR_MULTIPLIER = 1.5
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json",
@@ -27,21 +30,15 @@ def is_time_to_check(interval):
     minute = now.minute
     hour = now.hour
     
-    # GitHub Actions 可能会延迟几分钟，我们使用 < 15 分钟作为安全窗口
     if interval == "1D":
-        # 每天 UTC 00:00 检查（北京时间 08:00）
         return hour == 0 and minute < 15
     elif interval == "4H":
-        # 每 4 小时检查（UTC 00, 04, 08, 12, 16, 20）
         return hour % 4 == 0 and minute < 15
     elif interval == "1H":
-        # 每小时检查
         return minute < 15
     elif interval == "30m":
-        # 每 30 分钟检查（整点和半点）
         return minute < 15 or (30 <= minute < 45)
     elif interval == "15m":
-        # 15分钟周期始终检查（因为 cron 就是每15分钟跑一次）
         return True
     return True
 
@@ -184,16 +181,19 @@ def check_symbol(symbol, interval, alert_list):
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
     if max_spread <= threshold:
-        # 计算近60根K线的支撑位和压力位
+        # 计算近60根K线的支撑位和压力位（仅作为止盈参考）
         resistance = high_series.tail(60).max()
         support = low_series.tail(60).min()
         
-        # 基于支撑压力位计算止盈止损
-        long_sl = support - 0.5 * atr
+        # ================= 核心修改：基于当前价计算止损 =================
+        # 做多：入场价=当前价，止损=当前价 - 1.5倍ATR，止盈=压力位
+        long_sl = price - SL_ATR_MULTIPLIER * atr
         long_tp = resistance
         
-        short_sl = resistance + 0.5 * atr
+        # 做空：入场价=当前价，止损=当前价 + 1.5倍ATR，止盈=支撑位
+        short_sl = price + SL_ATR_MULTIPLIER * atr
         short_tp = support
+        # ================================================================
         
         # 计算盈亏比
         long_rr = (long_tp - price) / (price - long_sl) if (price - long_sl) > 0 else 0
@@ -249,7 +249,6 @@ if __name__ == "__main__":
             alert_list = []
             for sym in final_monitored:
                 for iv in INTERVALS:
-                    # 【核心】只在对应周期收盘的时间窗口内才检查，彻底解决重复警报问题
                     if is_time_to_check(iv):
                         check_symbol(sym, iv, alert_list)
                         time.sleep(0.1)
