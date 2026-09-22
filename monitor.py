@@ -18,22 +18,19 @@ HEADERS = {
 }
 
 def get_coingecko_symbols():
-    """动态获取前300个币种作为候选池，留出足够的顺延空间"""
+    """动态获取前500个币种作为候选池"""
     symbols = []
     try:
-        # 抓取第1页（前250名）
         url1 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false"
         resp1 = requests.get(url1, headers=HEADERS, timeout=15).json()
         if isinstance(resp1, list):
             symbols.extend([item["symbol"].upper() for item in resp1 if "symbol" in item])
 
-        # 抓取第2页（第251-500名），以防第一页里没有合约的太多
         url2 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2&sparkline=false"
         resp2 = requests.get(url2, headers=HEADERS, timeout=15).json()
         if isinstance(resp2, list):
             symbols.extend([item["symbol"].upper() for item in resp2 if "symbol" in item])
-            
-        return list(dict.fromkeys(symbols)) # 去重
+        return list(dict.fromkeys(symbols))
     except Exception as e:
         print(f"动态获取币种列表失败: {e}")
         return []
@@ -53,6 +50,23 @@ def get_okx_swap_symbols():
         return list(set(swap_list))
     except Exception as e:
         print(f"获取 OKX 合约名单失败: {e}")
+        return []
+
+def get_binance_swap_symbols():
+    """尝试获取币安所有 U 本位永续合约名单"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        resp = requests.get(url, headers=HEADERS, timeout=10).json()
+        swap_list = []
+        if "symbols" in resp:
+            for item in resp["symbols"]:
+                symbol = item.get("symbol", "")
+                if symbol.endswith("USDT") and item.get("contractType") == "PERPETUAL":
+                    coin = symbol.replace("USDT", "")
+                    swap_list.append(coin)
+        return list(set(swap_list))
+    except Exception as e:
+        print("⚠️ 获取币安合约名单失败(可能是IP被屏蔽)")
         return []
 
 def send_feishu(msg):
@@ -78,7 +92,7 @@ def check_symbol(symbol, interval, alert_list):
     kline_data = None
     data_source = "OKX合约"
     
-    # 1. 尝试币安合约（fapi）
+    # 1. 尝试币安合约
     binance_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={binance_swap_symbol}&interval={interval}&limit=150"
     try:
         resp = requests.get(binance_url, headers=HEADERS, timeout=8).json()
@@ -137,27 +151,37 @@ if __name__ == "__main__":
         all_symbols = get_coingecko_symbols()
         
         print("正在获取 OKX 永续合约名单...")
-        swap_coins = get_okx_swap_symbols()
+        okx_swap_coins = get_okx_swap_symbols()
         
-        if not all_symbols or not swap_coins:
-            print("⚠️ 获取币种或合约名单失败，跳过本次运行。")
+        print("正在尝试获取币安永续合约名单...")
+        binance_swap_coins = get_binance_swap_symbols()
+        
+        if not all_symbols or not okx_swap_coins:
+            print("⚠️ 获取币种或 OKX 合约名单失败，跳过本次运行。")
         else:
             # 稳定币 + NFT/AINFT 黑名单
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "NFT", "AINFT"]
             
-            # 【核心逻辑】顺延补足：只挑有合约的，直到凑够200个
             final_monitored = []
             for sym in all_symbols:
                 if sym in excluded_symbols:
                     continue
-                if sym not in swap_coins:
+                
+                # 必须要有 OKX 合约
+                if sym not in okx_swap_coins:
                     continue
+                
+                # 【核心】如果拿到了币安名单，那么必须币安也有这个合约
+                if binance_swap_coins and sym not in binance_swap_coins:
+                    continue
+                
                 final_monitored.append(sym)
                 if len(final_monitored) >= 200:
                     break
             
             print(f"候选池币种总数量: {len(all_symbols)}")
-            print(f"OKX 合约总数量: {len(swap_coins)}")
+            print(f"OKX 合约总数量: {len(okx_swap_coins)}")
+            print(f"币安 合约总数量: {len(binance_swap_coins)}")
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
             
             alert_list = []
