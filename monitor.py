@@ -6,10 +6,17 @@ import pandas as pd
 # 从 GitHub Secrets 读取密钥
 FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 
-# 监控的周期（OKX支持这些周期）
+# 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
-# 粘合阈值 (0.003 相当于 99.7% 重合度)
-THRESHOLD = 0.004
+
+# 【核心配置】不同周期使用不同的粘合阈值
+THRESHOLD_CONFIG = {
+    "15m": 0.003, # 15分钟用 0.3%
+    "30m": 0.003, # 30分钟用 0.3%
+    "1H": 0.004,  # 1小时用 0.4%
+    "4H": 0.005,  # 4小时用 0.5%
+    "1D": 0.006   # 1天用 0.6%
+}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -18,22 +25,18 @@ HEADERS = {
 }
 
 def get_coingecko_symbols():
-    """动态获取前500个币种作为候选池"""
+    """动态获取前1000个币种作为候选池，确保能凑够200个合约币"""
     symbols = []
-    try:
-        url1 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false"
-        resp1 = requests.get(url1, headers=HEADERS, timeout=15).json()
-        if isinstance(resp1, list):
-            symbols.extend([item["symbol"].upper() for item in resp1 if "symbol" in item])
-
-        url2 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2&sparkline=false"
-        resp2 = requests.get(url2, headers=HEADERS, timeout=15).json()
-        if isinstance(resp2, list):
-            symbols.extend([item["symbol"].upper() for item in resp2 if "symbol" in item])
-        return list(dict.fromkeys(symbols))
-    except Exception as e:
-        print(f"动态获取币种列表失败: {e}")
-        return []
+    # 分4页抓取，每页250个，共1000个候选
+    for page in range(1, 5):
+        try:
+            url = f"https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page={page}&sparkline=false"
+            resp = requests.get(url, headers=HEADERS, timeout=15).json()
+            if isinstance(resp, list):
+                symbols.extend([item["symbol"].upper() for item in resp if "symbol" in item])
+        except Exception as e:
+            print(f"获取第{page}页失败: {e}")
+    return list(dict.fromkeys(symbols)) # 去重
 
 def get_okx_swap_symbols():
     """获取 OKX 所有 USDT 永续合约名单"""
@@ -50,23 +53,6 @@ def get_okx_swap_symbols():
         return list(set(swap_list))
     except Exception as e:
         print(f"获取 OKX 合约名单失败: {e}")
-        return []
-
-def get_binance_swap_symbols():
-    """尝试获取币安所有 U 本位永续合约名单"""
-    try:
-        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-        resp = requests.get(url, headers=HEADERS, timeout=10).json()
-        swap_list = []
-        if "symbols" in resp:
-            for item in resp["symbols"]:
-                symbol = item.get("symbol", "")
-                if symbol.endswith("USDT") and item.get("contractType") == "PERPETUAL":
-                    coin = symbol.replace("USDT", "")
-                    swap_list.append(coin)
-        return list(set(swap_list))
-    except Exception as e:
-        print("⚠️ 获取币安合约名单失败(可能是IP被屏蔽)")
         return []
 
 def send_feishu(msg):
@@ -92,8 +78,10 @@ def check_symbol(symbol, interval, alert_list):
     kline_data = None
     data_source = "OKX合约"
     
-    # 1. 尝试币安合约
-    binance_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={binance_swap_symbol}&interval={interval}&limit=150"
+    # 1. 尝试币安合约（fapi）
+    # 币安合约的周期格式需要小写，如 1h, 4h, 1d
+    binance_interval = interval.lower()
+    binance_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={binance_swap_symbol}&interval={binance_interval}&limit=150"
     try:
         resp = requests.get(binance_url, headers=HEADERS, timeout=8).json()
         if isinstance(resp, list) and len(resp) > 0:
@@ -140,21 +128,21 @@ def check_symbol(symbol, interval, alert_list):
     diff_value = max(mas) - min(mas)
     max_spread = diff_value / price
     
-    if max_spread <= THRESHOLD:
+    # 【核心逻辑】根据当前周期，动态选择阈值
+    threshold = THRESHOLD_CONFIG.get(interval, 0.004)
+    
+    if max_spread <= threshold:
         alert_list.append(f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})")
 
 if __name__ == "__main__":
     if not FEISHU_WEBHOOK:
         print("错误: 缺少飞书 Webhook")
     else:
-        print("正在动态获取市值前 500 币种作为候选池...")
+        print("正在动态获取市值前 1000 币种作为候选池...")
         all_symbols = get_coingecko_symbols()
         
         print("正在获取 OKX 永续合约名单...")
         okx_swap_coins = get_okx_swap_symbols()
-        
-        print("正在尝试获取币安永续合约名单...")
-        binance_swap_coins = get_binance_swap_symbols()
         
         if not all_symbols or not okx_swap_coins:
             print("⚠️ 获取币种或 OKX 合约名单失败，跳过本次运行。")
@@ -162,26 +150,15 @@ if __name__ == "__main__":
             # 稳定币 + NFT/AINFT 黑名单
             excluded_symbols = ["USDC", "USD1", "USDG", "PYUSD", "RLUSD", "USDT", "USDS", "USDe", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "USAT", "NFT", "AINFT"]
             
+            # 顺延补足200个合约币
             final_monitored = []
             for sym in all_symbols:
-                if sym in excluded_symbols:
-                    continue
-                
-                # 必须要有 OKX 合约
-                if sym not in okx_swap_coins:
-                    continue
-                
-                # 【核心】如果拿到了币安名单，那么必须币安也有这个合约
-                if binance_swap_coins and sym not in binance_swap_coins:
-                    continue
-                
+                if sym in excluded_symbols: continue
+                if sym not in okx_swap_coins: continue
                 final_monitored.append(sym)
                 if len(final_monitored) >= 200:
                     break
             
-            print(f"候选池币种总数量: {len(all_symbols)}")
-            print(f"OKX 合约总数量: {len(okx_swap_coins)}")
-            print(f"币安 合约总数量: {len(binance_swap_coins)}")
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
             
             alert_list = []
