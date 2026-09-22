@@ -10,9 +10,9 @@ FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 # 监控的周期
 INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】
+# 【基础备用阈值】30分钟已改为 0.004 (0.4%)
 THRESHOLD_CONFIG = {
-    "15m": 0.003, "30m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.032
+    "15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.032
 }
 
 # 以当前价为锚点的止损距离（2.0倍ATR）
@@ -29,15 +29,22 @@ HEADERS = {
 }
 
 def is_time_to_check(interval):
+    """
+    【核心修改】根据用户要求：绝不跳单！
+    只要到了时间点，哪怕上一轮跑了很久，这一轮也必定检查。
+    """
     now = datetime.datetime.utcnow()
-    minute = now.minute
     hour = now.hour
-    if interval == "1D": return hour == 0 and minute < 15
-    elif interval == "4H": return hour % 4 == 0 and minute < 15
-    elif interval == "1H": return minute < 15
-    elif interval == "30m": return minute < 15 or (30 <= minute < 45)
-    elif interval == "15m": return True
-    return True
+    
+    # 1D：只要在 UTC 0 点这个小时内触发，就必定检查（覆盖北京时间 8:00-8:59）
+    if interval == "1D":
+        return hour == 0
+    # 4H：在 0,4,8,12,16,20 点的整个小时内触发，都必定检查
+    elif interval == "4H":
+        return hour % 4 == 0
+    # 15m, 30m, 1H：每次运行都必须检查，彻底杜绝漏单
+    else:
+        return True
 
 def get_btc_trend():
     try:
@@ -177,22 +184,18 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
     if max_spread <= threshold:
-        # ================= 新增：异常K线过滤 =================
-        # 提取刚刚收盘的那根K线数据（即 df 倒数第二根）
+        # 异常K线过滤
         last_open = df['open'].iloc[-2]
         last_close = df['close'].iloc[-2]
         last_high = df['high'].iloc[-2]
         last_low = df['low'].iloc[-2]
 
-        # 计算上影线和下影线长度
         upper_shadow = last_high - max(last_open, last_close)
         lower_shadow = min(last_open, last_close) - last_low
 
-        # 如果影线长度超过 2倍ATR，判定为插针假信号，直接过滤
         if upper_shadow > SHADOW_ATR_MULTIPLIER * atr or lower_shadow > SHADOW_ATR_MULTIPLIER * atr:
             print(f"⚠️ {symbol} [{interval}] 出现异常插针K线，已过滤（上影线:{upper_shadow:.4f}, 下影线:{lower_shadow:.4f}）")
             return
-        # ======================================================
 
         resistance = high_series.tail(60).max()
         support = low_series.tail(60).min()
@@ -283,10 +286,11 @@ if __name__ == "__main__":
                 for iv in INTERVALS:
                     if is_time_to_check(iv):
                         check_symbol(sym, iv, btc_trend, alert_list)
-                        time.sleep(0.15)
+                        time.sleep(0.2) # 稍微增加延时，防止请求过于频繁
             
             if alert_list:
-                header = "🚨 六线粘合警报汇总(合约终极版)!\n"
+                # 头部加上防重复提示，避免用户误解
+                header = "🚨 六线粘合警报汇总(合约终极版)!\n(注：为避免漏单，同一K线可能重复提醒，请以首次为准)\n"
                 body = "\n\n".join(alert_list)
                 full_msg = header + body
                 if len(full_msg) > 3000:
