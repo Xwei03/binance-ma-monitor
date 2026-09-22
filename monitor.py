@@ -27,8 +27,7 @@ HEADERS = {
 
 def is_time_to_check(interval):
     """
-    【精准时间窗口】
-    根据K线收盘时间，严格限制各周期的检查窗口，避免重复警报。
+    【精准时间窗口】严格对齐各个周期的K线收盘时间
     """
     now = datetime.datetime.utcnow()
     minute = now.minute
@@ -44,10 +43,10 @@ def is_time_to_check(interval):
         # 1小时：在每个整点的 00分~15分内检查
         return minute < 15
     elif interval == "30m":
-        # 30分钟：在 00分~15分 和 30分~45分 检查（即整点和半点收盘后）
+        # 30分钟：只在 00分~15分 和 30分~45分 检查（严格一小时两次）
         return minute < 15 or (30 <= minute < 45)
     elif interval == "15m":
-        # 15分钟：每次运行都必须检查（因为每次都有新的15分钟K线收盘）
+        # 15分钟：每次运行都必须检查（因为每15分钟收盘一次）
         return True
     return True
 
@@ -186,6 +185,7 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
     if max_spread <= threshold:
+        # 异常K线过滤
         last_open = df['open'].iloc[-2]
         last_close = df['close'].iloc[-2]
         last_high = df['high'].iloc[-2]
