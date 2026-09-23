@@ -1,8 +1,8 @@
 import os, time, datetime, requests, pandas as pd
 
 FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
-INTERVALS = ["15m", "1H", "4H", "1D"]
-THRESHOLD_CONFIG = {"15m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.035}
+INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
+THRESHOLD_CONFIG = {"15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035}
 SL_ATR_MULTIPLIER = 2.5
 BE_ATR_MULTIPLIER = 0.5
 SHADOW_ATR_MULTIPLIER = 2.0
@@ -17,6 +17,7 @@ def is_time_to_check(interval):
     if interval == "1D": return now.hour == 0
     elif interval == "4H": return now.hour % 4 == 0
     elif interval == "1H": return now.minute < 30
+    elif interval == "30m": return now.minute < 15 or (30 <= now.minute < 45)
     return True
 
 def get_btc_trend():
@@ -93,7 +94,6 @@ def check_symbol(symbol, interval, btc_trend, alerts):
 
     close, high, low = df["close"].iloc[:-1], df['high'].iloc[:-1], df['low'].iloc[:-1]
     
-    # MACD
     try:
         ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
         dif = ema12 - ema26; dea = dif.ewm(span=9, adjust=False).mean()
@@ -101,7 +101,6 @@ def check_symbol(symbol, interval, btc_trend, alerts):
         macd_tag = f"🟢 金叉 (零轴{'上' if dif.iloc[-1]>0 else '下'}方)" if cross == "金叉" else f"🔴 死叉 (零轴{'上' if dif.iloc[-1]>0 else '下'}方)" if cross == "死叉" else "➖ 无明显交叉"
     except Exception: macd_tag = "➖ MACD 未知"
 
-    # VOL
     try:
         ratio = float(df['volume'].iloc[-2]) / float(df['volume'].iloc[-22:-2].mean()) if float(df['volume'].iloc[-22:-2].mean()) > 0 else 1.0
         vol_tag = f"🔥 爆量 ({ratio:.1f}x)" if ratio >= 1.5 else f"💤 缩量 ({ratio:.1f}x)" if ratio <= 0.5 else f"➖ 平量 ({ratio:.1f}x)"
@@ -113,7 +112,6 @@ def check_symbol(symbol, interval, btc_trend, alerts):
     mas = [ema20, ema60, ema120, sma20, sma60, sma120]
     price, diff = close.iloc[-1], max(mas) - min(mas)
 
-    # ATR + 动态阈值
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean().iloc[-1]
     base = THRESHOLD_CONFIG.get(interval, 0.004)
@@ -121,7 +119,6 @@ def check_symbol(symbol, interval, btc_trend, alerts):
 
     if diff / price > threshold: return
     
-    # 插针过滤
     if (df['high'].iloc[-2] - max(df['open'].iloc[-2], df['close'].iloc[-2])) > SHADOW_ATR_MULTIPLIER * atr or \
        (min(df['open'].iloc[-2], df['close'].iloc[-2]) - df['low'].iloc[-2]) > SHADOW_ATR_MULTIPLIER * atr: return
 
