@@ -71,12 +71,12 @@ def chk(sym, iv, bt, al):
         for c in "ohlc": df[c] = pd.to_numeric(df[c])
     except: return
 
-    if vs.tail(96).sum() < 8e6: return  # 稍微放宽流动性要求，提高频率
+    if vs.tail(96).sum() < 8e6: return
 
     cl, hi, lo = df["c"].iloc[:-1], df['h'].iloc[:-1], df['l'].iloc[:-1]
     p = cl.iloc[-1]
 
-    # ========== 量能（高胜率核心，缩量直接杀） ==========
+    # ========== 量能（缩量直接放弃） ==========
     try:
         vol_ma = float(df['v'].iloc[-22:-2].mean())
         rr_ = float(df['v'].iloc[-2]) / vol_ma if vol_ma > 0 else 1
@@ -85,7 +85,7 @@ def chk(sym, iv, bt, al):
         elif rr_ >= 1.05:
             vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 需结合趋势", "平量"
         else:
-            return  # 缩量直接放弃，保胜率
+            return  # 缩量直接放弃
     except:
         vt, vst = "➖ 成交量未知", "未知"
 
@@ -98,7 +98,7 @@ def chk(sym, iv, bt, al):
     tr = pd.concat([hi-lo, (hi-cl.shift(1)).abs(), (lo-cl.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean().iloc[-1]
     base = TC.get(iv, 0.006)
-    thr = max(min((atr/p)*0.5, base*2.3), base*0.55)  # 放宽粘合
+    thr = max(min((atr/p)*0.5, base*2.3), base*0.55)
 
     if df_/p > thr: return
 
@@ -108,7 +108,7 @@ def chk(sym, iv, bt, al):
     if (last_h - max(last_o, last_c)) > SHM*atr or (min(last_o, last_c) - last_l) > SHM*atr:
         return
 
-    # ========== 止盈止损（提高实际盈亏比） ==========
+    # ========== 止盈止损 ==========
     rs, sp = hi.tail(55).max(), lo.tail(55).min()
     lsl, ssl = p - SLM*atr, p + SLM*atr
 
@@ -147,7 +147,7 @@ def chk(sym, iv, bt, al):
     elif srr >= 1.8 and srr > lrr and (itok or srr >= 2.8):
         pri, rv, rok = f"🎯 首选建议：做空 (RR {srr:.2f}) {st}", srr, srr >= 2.0
     else:
-        return  # 方向不明确直接不推，保质量
+        return
 
     # ========== 综合评级 ==========
     if vst == "爆量" and itok and rok:
@@ -157,7 +157,7 @@ def chk(sym, iv, bt, al):
     elif vst == "平量" and itok and rok:
         sm = "⚠️ 能做（减半仓位，0.5%风险）"
     else:
-        return  # 条件不够的不推送
+        return
 
     al.append(
         f"{sym} [{iv}] ({src})\n"
@@ -184,7 +184,7 @@ if __name__ == "__main__":
             print("获取失败")
         else:
             exc = ["USDC","USD1","USDG","PYUSD","RLUSD","USDT","USDS","USDe","DAI","BUSD","FDUSD","TUSD","USDP","GUSD","FRAX","USDD","USAT","NFT","AINFT"]
-            fin = [s for s in ss if s not in exc and s in sw][:220]  # 稍微多扫一点
+            fin = [s for s in ss if s not in exc and s in sw][:200]
             print(f"✅ 本次最终监控合约币种数量: {len(fin)}")
             bjt = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
             for iv in IVS:
@@ -193,7 +193,7 @@ if __name__ == "__main__":
                 b = []
                 for s in fin:
                     chk(s, iv, bt, b)
-                    time.sleep(0.11)
+                    time.sleep(0.15)  # 必须保留，防止被封IP
                 if b:
                     for i in range(0, len(b), 5):
                         send(f"🚨 {iv} 周期六线粘合警报! (北京时间: {bjt})\n\n" + "\n\n".join(b[i:i+5]))
