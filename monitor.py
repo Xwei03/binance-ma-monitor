@@ -7,10 +7,10 @@ import pandas as pd
 # 从 GitHub Secrets 读取密钥
 FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 
-# 【已删除30分钟】现在的监控周期
+# 监控的周期
 INTERVALS = ["15m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】已移除30m
+# 【基础备用阈值】
 THRESHOLD_CONFIG = {
     "15m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.035
 }
@@ -27,23 +27,19 @@ HEADERS = {
 
 def is_time_to_check(interval):
     """
-    【已删除30分钟逻辑】维持你要求的超大安全窗口
+    【超大安全窗口】彻底杜绝漏单
     """
     now = datetime.datetime.utcnow()
     minute = now.minute
     hour = now.hour
     
     if interval == "1D":
-        # 1天：窗口 4小时 (UTC 0点~3点)
         return hour < 4
     elif interval == "4H":
-        # 4小时：窗口 2小时 (0~1点，4~5点，8~9点...)
         return (hour % 4 == 0) or (hour % 4 == 1)
     elif interval == "1H":
-        # 1小时：窗口 50分钟 (整点后的00分~49分)
         return minute < 50
     elif interval == "15m":
-        # 15分钟：每次运行都必须检查
         return True
     return True
 
@@ -271,6 +267,9 @@ if __name__ == "__main__":
             
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
             
+            # 【新增】获取当前北京时间
+            bj_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+            
             for iv in INTERVALS:
                 if not is_time_to_check(iv):
                     continue
@@ -282,7 +281,8 @@ if __name__ == "__main__":
                     time.sleep(0.15)
                 
                 if period_alert_list:
-                    header = f"🚨 {iv} 周期六线粘合警报!\n"
+                    # 【修改】在消息头中加入北京时间
+                    header = f"🚨 {iv} 周期六线粘合警报! (北京时间: {bj_time})\n"
                     body = "\n\n".join(period_alert_list)
                     full_msg = header + body
                     if len(full_msg) > 3000:
