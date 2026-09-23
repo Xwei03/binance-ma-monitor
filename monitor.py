@@ -15,7 +15,7 @@ THRESHOLD_CONFIG = {
     "15m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.035
 }
 
-# 【核心修改】止损倍数从 2.0 改为 2.5，防止被主力插针扫损
+# 【核心修改】止损倍数 2.5倍ATR
 SL_ATR_MULTIPLIER = 2.5
 BE_ATR_MULTIPLIER = 0.5
 SHADOW_ATR_MULTIPLIER = 2.0
@@ -102,7 +102,8 @@ def send_feishu(msg):
 def get_rr_tag(rr):
     if rr >= 3: return "🔥 极佳机会 (盈亏比≥3)"
     elif rr >= 2: return "✅ 优质机会 (盈亏比≥2)"
-    elif rr >= 1: return "⚠️ 一般机会 (盈亏比≥1，谨慎)"
+    elif rr >= 1.8: return "⚠️ 一般机会 (盈亏比≥1.8，谨慎)"
+    elif rr >= 1: return "⚠️ 低盈亏比 (≥1，建议放弃)"
     else: return "❌ 盈亏比极差 (建议放弃)"
 
 def check_symbol(symbol, interval, btc_trend, alert_list):
@@ -248,10 +249,10 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         if funding_note:
             trade_advice += f"\n💰 {funding_note}"
         
-        # 智能多空决策系统
-        if long_rr >= 2 and long_rr >= short_rr:
+        # 【核心修改】智能多空决策，门槛从 2.0 调整为 1.8
+        if long_rr >= 1.8 and long_rr >= short_rr:
             primary_direction = f"🎯 首选建议：做多 (RR {long_rr:.2f}) {long_tag}"
-        elif short_rr >= 2 and short_rr > long_rr:
+        elif short_rr >= 1.8 and short_rr > long_rr:
             primary_direction = f"🎯 首选建议：做空 (RR {short_rr:.2f}) {short_tag}"
         else:
             primary_direction = "⚠️ 方向不明确，盈亏比均较低，建议观望，等待更优位置"
