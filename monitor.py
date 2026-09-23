@@ -101,20 +101,15 @@ def chk(sym, iv, bt, al):
     srr = (p-stp)/(ssl-p) if ssl > p else 0
     lt, st = rt(lrr), rt(srr)
 
-    lbe, sbe = p + BEM*atr, p - BEM*atr
-    be = f"🛡️ 保本提示 (做多): 当价格涨至 ${lbe:.4f} 时，请将止损移至开仓价 ${p:.4f}\n🛡️ 保本提示 (做空): 当价格跌至 ${sbe:.4f} 时，请将止损移至开仓价 ${p:.4f}"
+    be = f"🛡️ 保本提示 (做多): 当价格涨至 ${p + BEM*atr:.4f} 时，请将止损移至开仓价 ${p:.4f}\n🛡️ 保本提示 (做空): 当价格跌至 ${p - BEM*atr:.4f} 时，请将止损移至开仓价 ${p:.4f}"
 
     fr = fund(ok)
     fn = f"⚠️ 资金费率 {fr*100:.3f}% 多头拥挤，慎多" if fr > 0.001 else f"⚠️ 资金费率 {fr*100:.3f}% 空头拥挤，慎空" if fr < -0.001 else ""
 
     if p > e200:
-        td, tn = "📈 多头趋势 (价格 > EMA200)", "✅ 顺势，优先考虑做多" if bt else "⚠️ 大盘偏空 (BTC < EMA200)，逆势做多风险大"
-        bn = "" if bt else " (BTC警告)"
-        itok = bt
+        td, tn, bn, itok = "📈 多头趋势 (价格 > EMA200)", "✅ 顺势，优先考虑做多" if bt else "⚠️ 大盘偏空 (BTC < EMA200)，逆势做多风险大", "" if bt else " (BTC警告)", bt
     else:
-        td, tn = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先考虑做空" if not bt else "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大"
-        bn = "" if not bt else " (BTC警告)"
-        itok = not bt
+        td, tn, bn, itok = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先考虑做空" if not bt else "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大", "" if not bt else " (BTC警告)", not bt
 
     adv = f"📈 做多: 止损 ${lsl:.4f} / 止盈 ${ltp:.4f} (RR: {lrr:.2f}) {lt}\n📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}"
     if fn: adv += f"\n💰 {fn}"
