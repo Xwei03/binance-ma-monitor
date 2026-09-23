@@ -2,13 +2,13 @@ import os, time, datetime, requests, pandas as pd
 
 WH = os.environ.get("FEISHU_WEBHOOK")
 IVS = ["15m", "30m", "1H", "4H", "1D"]
-TC = {"15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035}
+TC = {"15m": 0.004, "30m": 0.005, "1H": 0.006, "4H": 0.015, "1D": 0.035}
 SLM, BEM, SHM = 2.5, 0.5, 2.0
 H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 def ok_t(iv):
     n = datetime.datetime.utcnow()
-    return (n.hour == 0) if iv == "1D" else (n.hour % 4 == 0) if iv == "4H" else (n.minute < 30) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
+    return (n.hour == 0 and n.minute < 30) if iv == "1D" else (n.hour % 4 == 0 and n.minute < 30) if iv == "4H" else (n.minute < 30) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
 
 def btc_t():
     try:
@@ -152,7 +152,7 @@ if __name__ == "__main__":
             bjt = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
             for iv in IVS:
                 if not ok_t(iv): continue
-                print(f"正在检查周期: {iv}...")  # <--- 这行加回来了！
+                print(f"正在检查周期: {iv}...")
                 b = []
                 for s in fin:
                     chk(s, iv, bt, b); time.sleep(0.15)
