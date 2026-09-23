@@ -27,19 +27,23 @@ HEADERS = {
 
 def is_time_to_check(interval):
     """
-    【超大安全窗口】彻底杜绝漏单
+    【适度收缩窗口】兼顾防漏单和防重复
     """
     now = datetime.datetime.utcnow()
     minute = now.minute
     hour = now.hour
     
     if interval == "1D":
-        return hour < 4
+        # 1天：只在 UTC 0点 的 00~59分内检查（窗口 1小时）
+        return hour == 0
     elif interval == "4H":
-        return (hour % 4 == 0) or (hour % 4 == 1)
+        # 4小时：只在 0,4,8,12,16,20 点的 00~59分内检查（窗口 1小时）
+        return hour % 4 == 0
     elif interval == "1H":
-        return minute < 50
+        # 1小时：只在整点后的 00~29分内检查（窗口 30分钟）
+        return minute < 30
     elif interval == "15m":
+        # 15分钟：每次运行都必须检查
         return True
     return True
 
@@ -267,7 +271,7 @@ if __name__ == "__main__":
             
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
             
-            # 【新增】获取当前北京时间
+            # 获取当前北京时间
             bj_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
             
             for iv in INTERVALS:
@@ -281,7 +285,7 @@ if __name__ == "__main__":
                     time.sleep(0.15)
                 
                 if period_alert_list:
-                    # 【修改】在消息头中加入北京时间
+                    # 在消息头中加入北京时间
                     header = f"🚨 {iv} 周期六线粘合警报! (北京时间: {bj_time})\n"
                     body = "\n\n".join(period_alert_list)
                     full_msg = header + body
