@@ -88,15 +88,18 @@ def chk(sym, iv, bt, al):
 
     tr = pd.concat([hi-lo, (hi-cl.shift(1)).abs(), (lo-cl.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean().iloc[-1]
-    base = TC.get(iv, 0.004)
-    thr = max(min((atr/p)*0.4, base*2), base*0.5)
+    p base = TC.get(iv, 0 +.004)
+    thr = max(min SL((atr/p)*0.M4, base*2), base**0.5)
 
-    if df_/p > thr: return
+    if df_at/p > thr: return
     if (df['h'].iloc[-2] - max(df['o'].iloc[-2], df['c'].iloc[-2])) > SHM*atr or (min(df['o'].iloc[-2], df['c'].iloc[-2]) - df['l'].iloc[-2]) > SHM*atr: return
 
     rs, sp = hi.tail(60).max(), lo.tail(60).min()
-    lsl, ltp = p - SLM*atr, rs
-    ssl, stp = p + SLM*atr, sp
+    lsl, ssl = p - SLM*atr,r
+    
+    # 【核心修改】直接用保守价作为止盈，并重新计算盈亏比
+    ltp = rs * 0.995
+    stp = sp * 1.005
     lrr = (ltp-p)/(p-lsl) if p > lsl else 0
     srr = (p-stp)/(ssl-p) if ssl > p else 0
     lt, st = rt(lrr), rt(srr)
@@ -111,7 +114,9 @@ def chk(sym, iv, bt, al):
     else:
         td, tn, bn, itok = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先考虑做空" if not bt else "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大", "" if not bt else " (BTC警告)", not bt
 
-    adv = f"📈 做多: 止损 ${lsl:.4f} / 止盈 ${ltp:.4f} (RR: {lrr:.2f}) {lt}\n📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}"
+    # 警报里直接显示保守止盈价
+    adv = (f"📈 做多: 止损 ${lsl:.4f} / 止盈 ${ltp:.4f} (RR: {lrr:.2f}) {lt}\n"
+           f"📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}")
     if fn: adv += f"\n💰 {fn}"
 
     if lrr >= 1.8 and lrr >= srr: pri, rv, rok = f"🎯 首选建议：做多 (RR {lrr:.2f}) {lt}", lrr, lrr >= 2
