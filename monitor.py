@@ -7,12 +7,12 @@ import pandas as pd
 # 从 GitHub Secrets 读取密钥
 FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
 
-# 监控的周期
-INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
+# 【已删除30分钟】现在的监控周期
+INTERVALS = ["15m", "1H", "4H", "1D"]
 
-# 【基础备用阈值】1D为 0.035 (3.5%)
+# 【基础备用阈值】已移除30m
 THRESHOLD_CONFIG = {
-    "15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035
+    "15m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.035
 }
 
 SL_ATR_MULTIPLIER = 2.0
@@ -27,26 +27,23 @@ HEADERS = {
 
 def is_time_to_check(interval):
     """
-    【精准时间窗口】严格对齐各个周期的K线收盘时间
+    【已删除30分钟逻辑】维持你要求的超大安全窗口
     """
     now = datetime.datetime.utcnow()
     minute = now.minute
     hour = now.hour
     
     if interval == "1D":
-        # 1天：只在 UTC 0点（北京时间8点）的 00分~15分内检查
-        return hour == 0 and minute < 15
+        # 1天：窗口 4小时 (UTC 0点~3点)
+        return hour < 4
     elif interval == "4H":
-        # 4小时：在 0,4,8,12,16,20 点的 00分~15分内检查
-        return hour % 4 == 0 and minute < 15
+        # 4小时：窗口 2小时 (0~1点，4~5点，8~9点...)
+        return (hour % 4 == 0) or (hour % 4 == 1)
     elif interval == "1H":
-        # 1小时：在每个整点的 00分~15分内检查
-        return minute < 15
-    elif interval == "30m":
-        # 30分钟：只在 00分~15分 和 30分~45分 检查（严格一小时两次）
-        return minute < 15 or (30 <= minute < 45)
+        # 1小时：窗口 50分钟 (整点后的00分~49分)
+        return minute < 50
     elif interval == "15m":
-        # 15分钟：每次运行都必须检查（因为每15分钟收盘一次）
+        # 15分钟：每次运行都必须检查
         return True
     return True
 
@@ -185,7 +182,6 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         threshold = THRESHOLD_CONFIG.get(interval, 0.004)
 
     if max_spread <= threshold:
-        # 异常K线过滤
         last_open = df['open'].iloc[-2]
         last_close = df['close'].iloc[-2]
         last_high = df['high'].iloc[-2]
