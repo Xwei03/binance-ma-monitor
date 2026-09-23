@@ -26,24 +26,17 @@ HEADERS = {
 }
 
 def is_time_to_check(interval):
-    """
-    【适度收缩窗口】兼顾防漏单和防重复
-    """
     now = datetime.datetime.utcnow()
     minute = now.minute
     hour = now.hour
     
     if interval == "1D":
-        # 1天：只在 UTC 0点 的 00~59分内检查（窗口 1小时）
         return hour == 0
     elif interval == "4H":
-        # 4小时：只在 0,4,8,12,16,20 点的 00~59分内检查（窗口 1小时）
         return hour % 4 == 0
     elif interval == "1H":
-        # 1小时：只在整点后的 00~29分内检查（窗口 30分钟）
         return minute < 30
     elif interval == "15m":
-        # 15分钟：每次运行都必须检查
         return True
     return True
 
@@ -157,6 +150,21 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
     high_series = df['high'].iloc[:-1]
     low_series = df['low'].iloc[:-1]
 
+    # 成交量详细标签
+    try:
+        current_vol = float(df['volume'].iloc[-2]) 
+        avg_vol = float(df['volume'].iloc[-22:-2].mean()) 
+        vol_ratio = current_vol / avg_vol if avg_vol > 0 else 1.0
+        
+        if vol_ratio >= 1.5:
+            vol_tag = f"🔥 爆量 (较均量{vol_ratio:.1f}倍) -> ✅ 真突破概率大，可顺势入场"
+        elif vol_ratio <= 0.5:
+            vol_tag = f"💤 缩量 (较均量{vol_ratio:.1f}倍) -> ⚠️ 假突破概率大，建议直接放弃"
+        else:
+            vol_tag = f"➖ 平量 (较均量{vol_ratio:.1f}倍) -> ⚠️ 资金分歧，需结合趋势谨慎操作"
+    except Exception:
+        vol_tag = "➖ 成交量未知"
+
     ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     ema60 = close.ewm(span=60, adjust=False).mean().iloc[-1]
     ema120 = close.ewm(span=120, adjust=False).mean().iloc[-1]
@@ -239,11 +247,13 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         if funding_note:
             trade_advice += f"\n💰 {funding_note}"
         
+        # 排版：用双换行符 \n\n 制造空行，让阅读更清晰
         alert_list.append(
             f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})\n"
-            f"🔴 压力位: ${resistance:.4f} / 🟢 支撑位: ${support:.4f}\n"
-            f"🧭 趋势状态: {trend_desc} ({trade_note}){btc_note}\n"
-            f"{trade_advice}\n"
+            f"📊 成交量: {vol_tag}\n\n"
+            f"🔴 压力位: ${resistance:.4f} / 🟢 支撑位: ${support:.4f}\n\n"
+            f"🧭 趋势状态: {trend_desc} ({trade_note}){btc_note}\n\n"
+            f"{trade_advice}\n\n"
             f"{be_advice}"
         )
 
@@ -271,7 +281,6 @@ if __name__ == "__main__":
             
             print(f"✅ 本次最终监控合约币种数量: {len(final_monitored)}")
             
-            # 获取当前北京时间
             bj_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
             
             for iv in INTERVALS:
@@ -285,8 +294,8 @@ if __name__ == "__main__":
                     time.sleep(0.15)
                 
                 if period_alert_list:
-                    # 在消息头中加入北京时间
-                    header = f"🚨 {iv} 周期六线粘合警报! (北京时间: {bj_time})\n"
+                    # 标题加上双换行，与第一条警报隔开
+                    header = f"🚨 {iv} 周期六线粘合警报! (北京时间: {bj_time})\n\n"
                     body = "\n\n".join(period_alert_list)
                     full_msg = header + body
                     if len(full_msg) > 3000:
