@@ -94,17 +94,19 @@ def check_symbol(symbol, interval, btc_trend, alerts):
 
     close, high, low = df["close"].iloc[:-1], df['high'].iloc[:-1], df['low'].iloc[:-1]
 
-    # 成交量详细标签（带主力进场提示）
     try:
         ratio = float(df['volume'].iloc[-2]) / float(df['volume'].iloc[-22:-2].mean()) if float(df['volume'].iloc[-22:-2].mean()) > 0 else 1.0
         if ratio >= 1.5:
             vol_tag = f"🔥 爆量 ({ratio:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场"
+            vol_state = "爆量"
         elif ratio <= 0.5:
             vol_tag = f"💤 缩量 ({ratio:.1f}x) -> ⚠️ 主力未进场，假突破概率大，建议放弃"
+            vol_state = "缩量"
         else:
             vol_tag = f"➖ 平量 ({ratio:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作"
+            vol_state = "平量"
     except Exception:
-        vol_tag = "➖ 成交量未知"
+        vol_tag, vol_state = "➖ 成交量未知", "未知"
 
     ema20, ema60, ema120 = [close.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
     sma20, sma60, sma120 = [close.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
@@ -138,21 +140,37 @@ def check_symbol(symbol, interval, btc_trend, alerts):
     if price > ema200:
         t_desc, t_note = "📈 多头趋势 (价格 > EMA200)", "✅ 顺势，优先做多" if btc_trend else "⚠️ 大盘偏空，逆势做多风险大"
         b_note = "" if btc_trend else " (BTC警告)"
+        is_trend_ok = btc_trend
     else:
         t_desc, t_note = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先做空" if not btc_trend else "⚠️ 大盘偏多，逆势做空风险大"
         b_note = "" if not btc_trend else " (BTC警告)"
+        is_trend_ok = not btc_trend
     
     advice = f"📈 做多: 止损 ${l_sl:.4f} / 止盈 ${l_tp:.4f} (RR: {l_rr:.2f}) {l_tag}\n📉 做空: 止损 ${s_sl:.4f} / 止盈 ${s_tp:.4f} (RR: {s_rr:.2f}) {s_tag}"
     if fund: advice += f"\n💰 {fund}"
     
-    if l_rr >= 1.8 and l_rr >= s_rr: primary = f"🎯 首选建议：做多 (RR {l_rr:.2f}) {l_tag}"
-    elif s_rr >= 1.8 and s_rr > l_rr: primary = f"🎯 首选建议：做空 (RR {s_rr:.2f}) {s_tag}"
-    else: primary = "⚠️ 方向不明确，盈亏比均较低，建议观望"
+    if l_rr >= 1.8 and l_rr >= s_rr:
+        primary = f"🎯 首选建议：做多 (RR {l_rr:.2f}) {l_tag}"
+        rr_val, rr_ok = l_rr, (l_rr >= 2)
+    elif s_rr >= 1.8 and s_rr > l_rr:
+        primary = f"🎯 首选建议：做空 (RR {s_rr:.2f}) {s_tag}"
+        rr_val, rr_ok = s_rr, (s_rr >= 2)
+    else:
+        primary = "⚠️ 方向不明确，盈亏比均较低，建议观望"
+        rr_val, rr_ok = 0, False
+    
+    if rr_val == 0: summary = "❌ 不能做（方向不明确）"
+    elif vol_state == "缩量": summary = "❌ 不能做（主力未进场，假突破）"
+    elif vol_state == "爆量" and is_trend_ok and rr_ok: summary = "✅ 能做（正常仓位，1%风险）"
+    elif vol_state == "平量" or not is_trend_ok or not rr_ok: summary = "⚠️ 能做（减半仓位，0.5%风险）"
+    else: summary = "✅ 能做（正常仓位）"
 
     alerts.append(
         f"{symbol} [{interval}] 六线差值:${diff:.4f} (价差:{diff/price:.2%}) 当前价:${price:.4f} ({source})\n"
         f"📊 成交量: {vol_tag}\n"
-        f"{primary}\n\n🔴 压力位: ${res:.4f} / 🟢 支撑位: ${sup:.4f}\n\n"
+        f"{primary}\n"
+        f"📋 综合评级：{summary}\n\n"
+        f"🔴 压力位: ${res:.4f} / 🟢 支撑位: ${sup:.4f}\n\n"
         f"🧭 趋势状态: {t_desc} ({t_note}){b_note}\n\n{advice}\n\n{be_adv}"
     )
 
