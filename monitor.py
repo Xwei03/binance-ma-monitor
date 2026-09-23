@@ -2,7 +2,7 @@ import os, time, datetime, requests, pandas as pd
 
 WH = os.environ.get("FEISHU_WEBHOOK")
 IVS = ["15m", "30m", "1H", "4H", "1D"]
-TC = {"15m": 0.004, "30m": 0.005, "1H": 0.006, "4H": 0.02, "1D": 0.04}  # 保持你原来的
+TC = {"15m": 0.004, "30m": 0.005, "1H": 0.006, "4H": 0.02, "1D": 0.04}
 SLM, BEM, SHM = 2.5, 0.5, 2.0
 H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
@@ -73,16 +73,13 @@ def chk(sym, iv, bt, al):
     if vs.tail(96).sum() < 1e7: return
 
     cl, hi, lo = df["c"].iloc[:-1], df['h'].iloc[:-1], df['l'].iloc[:-1]
-    p = cl.iloc[-1]
 
-    # 量能过滤（缩量直接放弃，提升胜率）
     try:
-        vol_ma = float(df['v'].iloc[-22:-2].mean())
-        rr_ = float(df['v'].iloc[-2]) / vol_ma if vol_ma > 0 else 1
+        rr_ = float(df['v'].iloc[-2]) / float(df['v'].iloc[-22:-2].mean()) if df['v'].iloc[-22:-2].mean() > 0 else 1
         if rr_ >= 1.5:
-            vt, vst = f"🔥 爆量 ({rr_:.1f}x) -> ✅ 主力进场，真突破概率大", "爆量"
+            vt, vst = f"🔥 爆量 ({rr_:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场", "爆量"
         elif rr_ <= 0.5:
-            return  # 缩量直接放弃
+            return  # 缩量直接放弃（提升胜率）
         else:
             vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作", "平量"
     except:
@@ -91,7 +88,7 @@ def chk(sym, iv, bt, al):
     e20, e60, e120 = [cl.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
     s20, s60, s120 = [cl.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
     e200 = cl.ewm(span=200, adjust=False).mean().iloc[-1]
-    df_ = max([e20,e60,e120,s20,s60,s120]) - min([e20,e60,e120,s20,s60,s120])
+    p, df_ = cl.iloc[-1], max([e20,e60,e120,s20,s60,s120]) - min([e20,e60,e120,s20,s60,s120])
 
     tr = pd.concat([hi-lo, (hi-cl.shift(1)).abs(), (lo-cl.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean().iloc[-1]
@@ -99,24 +96,19 @@ def chk(sym, iv, bt, al):
     thr = max(min((atr/p)*0.4, base*2), base*0.5)
 
     if df_/p > thr: return
-
-    # 影线过滤
-    if (df['h'].iloc[-2] - max(df['o'].iloc[-2], df['c'].iloc[-2])) > SHM*atr or (min(df['o'].iloc[-2], df['c'].iloc[-2]) - df['l'].iloc[-2]) > SHM*atr:
-        return
+    if (df['h'].iloc[-2] - max(df['o'].iloc[-2], df['c'].iloc[-2])) > SHM*atr or (min(df['o'].iloc[-2], df['c'].iloc[-2]) - df['l'].iloc[-2]) > SHM*atr: return
 
     rs, sp = hi.tail(60).max(), lo.tail(60).min()
     lsl, ssl = p - SLM*atr, p + SLM*atr
-
-    # 止盈优化：保守 + ATR 取更优
+    
+    # 止盈优化：保守价 + ATR止盈 取更优
     ltp = max(rs * 0.995, p + 2.5 * atr)
     stp = min(sp * 1.005, p - 2.5 * atr)
-
-    lrr = (ltp - p) / (p - lsl) if p > lsl else 0
-    srr = (p - stp) / (ssl - p) if ssl > p else 0
+    lrr = (ltp-p)/(p-lsl) if p > lsl else 0
+    srr = (p-stp)/(ssl-p) if ssl > p else 0
     lt, st = rt(lrr), rt(srr)
 
-    be = (f"🛡️ 保本提示 (做多): 当价格涨至 ${p + BEM*atr:.4f} 时，请将止损移至开仓价 ${p:.4f}\n"
-          f"🛡️ 保本提示 (做空): 当价格跌至 ${p - BEM*atr:.4f} 时，请将止损移至开仓价 ${p:.4f}")
+    be = f"🛡️ 保本提示 (做多): 当价格涨至 ${p + BEM*atr:.4f} 时，请将止损移至开仓价 ${p:.4f}\n🛡️ 保本提示 (做空): 当价格跌至 ${p - BEM*atr:.4f} 时，请将止损移至开仓价 ${p:.4f}"
 
     fr = fund(ok)
     fn = f"⚠️ 资金费率 {fr*100:.3f}% 多头拥挤，慎多" if fr > 0.001 else f"⚠️ 资金费率 {fr*100:.3f}% 空头拥挤，慎空" if fr < -0.001 else ""
@@ -137,7 +129,6 @@ def chk(sym, iv, bt, al):
     else:
         return
 
-    # 综合评级（只推能做的）
     if vst == "爆量" and itok and rok:
         sm = "✅ 能做（正常仓位，1%风险）"
     elif vst == "爆量" and rok:
@@ -162,14 +153,12 @@ def chk(sym, iv, bt, al):
     )
 
 if __name__ == "__main__":
-    if not WH:
-        print("缺少Webhook")
+    if not WH: print("缺少Webhook")
     else:
         bt = btc_t()
         ss = cg()
         sw = okx()
-        if not ss or not sw:
-            print("获取失败")
+        if not ss or not sw: print("获取失败")
         else:
             exc = ["USDC","USD1","USDG","PYUSD","RLUSD","USDT","USDS","USDe","DAI","BUSD","FDUSD","TUSD","USDP","GUSD","FRAX","USDD","USAT","NFT","AINFT"]
             fin = [s for s in ss if s not in exc and s in sw][:200]
@@ -180,12 +169,9 @@ if __name__ == "__main__":
                 print(f"正在检查周期: {iv}...")
                 b = []
                 for s in fin:
-                    chk(s, iv, bt, b)
-                    time.sleep(0.15)  # 必须保留
+                    chk(s, iv, bt, b); time.sleep(0.15)
                 if b:
                     for i in range(0, len(b), 5):
                         send(f"🚨 {iv} 周期六线粘合警报! (北京时间: {bjt})\n\n" + "\n\n".join(b[i:i+5]))
                     print(f"✅ {iv} 周期已发送 {len(b)} 个警报")
-                else:
-                    print(f"ℹ️ {iv} 周期无符合条件信号")
             print("本次所有周期检查完毕。")
