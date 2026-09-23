@@ -2,7 +2,6 @@ import os, time, datetime, requests, pandas as pd
 
 WH = os.environ.get("FEISHU_WEBHOOK")
 IVS = ["15m", "30m", "1H", "4H", "1D"]
-# 粘合阈值适度放宽，提高频率
 TC = {"15m": 0.0055, "30m": 0.007, "1H": 0.009, "4H": 0.028, "1D": 0.05}
 SLM, BEM, SHM = 2.3, 0.55, 1.9
 H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -76,7 +75,7 @@ def chk(sym, iv, bt, al):
     cl, hi, lo = df["c"].iloc[:-1], df['h'].iloc[:-1], df['l'].iloc[:-1]
     p = cl.iloc[-1]
 
-    # ========== 量能（缩量直接放弃） ==========
+    # 量能过滤（缩量直接放弃）
     try:
         vol_ma = float(df['v'].iloc[-22:-2].mean())
         rr_ = float(df['v'].iloc[-2]) / vol_ma if vol_ma > 0 else 1
@@ -85,11 +84,10 @@ def chk(sym, iv, bt, al):
         elif rr_ >= 1.05:
             vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 需结合趋势", "平量"
         else:
-            return  # 缩量直接放弃
+            return
     except:
         vt, vst = "➖ 成交量未知", "未知"
 
-    # ========== 均线粘合 ==========
     e20, e60, e120 = [cl.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
     s20, s60, s120 = [cl.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
     e200 = cl.ewm(span=200, adjust=False).mean().iloc[-1]
@@ -102,13 +100,11 @@ def chk(sym, iv, bt, al):
 
     if df_/p > thr: return
 
-    # 影线过滤
     last_h, last_l = df['h'].iloc[-2], df['l'].iloc[-2]
     last_o, last_c = df['o'].iloc[-2], df['c'].iloc[-2]
     if (last_h - max(last_o, last_c)) > SHM*atr or (min(last_o, last_c) - last_l) > SHM*atr:
         return
 
-    # ========== 止盈止损 ==========
     rs, sp = hi.tail(55).max(), lo.tail(55).min()
     lsl, ssl = p - SLM*atr, p + SLM*atr
 
@@ -125,7 +121,6 @@ def chk(sym, iv, bt, al):
     fr = fund(ok)
     fn = f"⚠️ 资金费率 {fr*100:.3f}% 多头拥挤，慎多" if fr > 0.001 else f"⚠️ 资金费率 {fr*100:.3f}% 空头拥挤，慎空" if fr < -0.001 else ""
 
-    # ========== 趋势 ==========
     if p > e200:
         td = "📈 多头趋势 (价格 > EMA200)"
         tn = "✅ 顺势优先做多" if bt else "⚠️ 大盘偏空，逆势需谨慎"
@@ -141,7 +136,6 @@ def chk(sym, iv, bt, al):
            f"📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}")
     if fn: adv += f"\n💰 {fn}"
 
-    # 方向选择（逆势只允许高RR）
     if lrr >= 1.8 and lrr >= srr and (itok or lrr >= 2.8):
         pri, rv, rok = f"🎯 首选建议：做多 (RR {lrr:.2f}) {lt}", lrr, lrr >= 2.0
     elif srr >= 1.8 and srr > lrr and (itok or srr >= 2.8):
@@ -149,7 +143,6 @@ def chk(sym, iv, bt, al):
     else:
         return
 
-    # ========== 综合评级 ==========
     if vst == "爆量" and itok and rok:
         sm = "✅ 能做（正常仓位，1%风险）"
     elif vst == "爆量" and rok:
@@ -193,7 +186,7 @@ if __name__ == "__main__":
                 b = []
                 for s in fin:
                     chk(s, iv, bt, b)
-                    time.sleep(0.15)  # 必须保留，防止被封IP
+                    time.sleep(0.15)  # 币种扫描间隔，必须保留，防止被封IP
                 if b:
                     for i in range(0, len(b), 5):
                         send(f"🚨 {iv} 周期六线粘合警报! (北京时间: {bjt})\n\n" + "\n\n".join(b[i:i+5]))
