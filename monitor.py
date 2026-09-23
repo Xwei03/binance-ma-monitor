@@ -2,7 +2,7 @@ import os, time, datetime, requests, pandas as pd
 
 WH = os.environ.get("FEISHU_WEBHOOK")
 IVS = ["15m", "30m", "1H", "4H", "1D"]
-TC = {"15m": 0.004, "30m": 0.005, "1H": 0.006, "4H": 0.015, "1D": 0.035}
+TC = {"15m": 0.004, "30m": 0.005, "1H": 0.006, "4H": 0.02, "1D": 0.04}
 SLM, BEM, SHM = 2.5, 0.5, 2.0
 H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
