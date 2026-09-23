@@ -152,6 +152,7 @@ if __name__ == "__main__":
             bjt = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
             for iv in IVS:
                 if not ok_t(iv): continue
+                print(f"正在检查周期: {iv}...")  # <--- 这行加回来了！
                 b = []
                 for s in fin:
                     chk(s, iv, bt, b); time.sleep(0.15)
