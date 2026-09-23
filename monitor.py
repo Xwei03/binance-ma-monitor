@@ -1,200 +1,167 @@
 import os, time, datetime, requests, pandas as pd
 
-FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK")
-INTERVALS = ["15m", "30m", "1H", "4H", "1D"]
-THRESHOLD_CONFIG = {"15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035}
-SL_ATR_MULTIPLIER = 2.5
-BE_ATR_MULTIPLIER = 0.5
-SHADOW_ATR_MULTIPLIER = 2.0
+WH = os.environ.get("FEISHU_WEBHOOK")
+IVS = ["15m", "30m", "1H", "4H", "1D"]
+TC = {"15m": 0.003, "30m": 0.004, "1H": 0.005, "4H": 0.015, "1D": 0.035}
+SLM, BEM, SHM = 2.5, 0.5, 2.0
+H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9"
-}
+def ok_t(iv):
+    n = datetime.datetime.utcnow()
+    return (n.hour == 0) if iv == "1D" else (n.hour % 4 == 0) if iv == "4H" else (n.minute < 30) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
 
-def is_time_to_check(interval):
-    now = datetime.datetime.utcnow()
-    if interval == "1D": return now.hour == 0
-    elif interval == "4H": return now.hour % 4 == 0
-    elif interval == "1H": return now.minute < 30
-    elif interval == "30m": return now.minute < 15 or (30 <= now.minute < 45)
-    return True
-
-def get_btc_trend():
+def btc_t():
     try:
-        url = "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1H&limit=300"
-        r = requests.get(url, headers=HEADERS, timeout=10).json()
+        r = requests.get("https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1H&limit=300", headers=H, timeout=10).json()
         if r.get("code") == "0":
-            df = pd.DataFrame(r["data"], columns=["ts","open","high","low","close","vol","volCcy","volCcyQuote","confirm"]).iloc[::-1]
-            close = pd.to_numeric(df["close"])
-            return close.iloc[-1] > close.ewm(span=200, adjust=False).mean().iloc[-1]
-    except Exception: pass
+            c = pd.to_numeric(pd.DataFrame(r["data"], columns=["t","o","h","l","c","v","vc","vq","x"])["c"])
+            return c.iloc[-1] > c.ewm(span=200, adjust=False).mean().iloc[-1]
+    except: pass
     return True
 
-def get_funding_rate(sym):
-    try:
-        url = f"https://www.okx.com/api/v5/public/funding-rate?instId={sym}"
-        r = requests.get(url, headers=HEADERS, timeout=8).json()
-        return float(r["data"][0]["fundingRate"]) if r.get("code") == "0" else 0.0
-    except Exception: return 0.0
+def fund(s):
+    try: return float(requests.get(f"https://www.okx.com/api/v5/public/funding-rate?instId={s}", headers=H, timeout=8).json()["data"][0]["fundingRate"])
+    except: return 0
 
-def get_coingecko_symbols():
-    syms = []
+def cg():
+    s = []
     for p in range(1, 5):
         try:
-            url = f"https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page={p}&sparkline=false"
-            r = requests.get(url, headers=HEADERS, timeout=15).json()
-            if isinstance(r, list): syms.extend([i["symbol"].upper() for i in r if "symbol" in i])
-        except Exception: pass
-    return list(dict.fromkeys(syms))
+            r = requests.get(f"https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page={p}&sparkline=false", headers=H, timeout=15).json()
+            if isinstance(r, list): s += [i["symbol"].upper() for i in r if "symbol" in i]
+        except: pass
+    return list(dict.fromkeys(s))
 
-def get_okx_swap_symbols():
+def okx():
     try:
-        url = "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
-        r = requests.get(url, headers=HEADERS, timeout=15).json()
-        return list(set([i["instId"].split("-")[0] for i in r.get("data", []) if i["instId"].endswith("-USDT-SWAP")])) if r.get("code") == "0" else []
-    except Exception: return []
+        r = requests.get("https://www.okx.com/api/v5/public/instruments?instType=SWAP", headers=H, timeout=15).json()
+        return list(set(i["instId"].split("-")[0] for i in r.get("data", []) if i["instId"].endswith("-USDT-SWAP")))
+    except: return []
 
-def send_feishu(msg):
-    try: requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": msg}}, timeout=10)
-    except Exception as e: print(f"发送失败: {e}")
+def send(m):
+    try: requests.post(WH, json={"msg_type": "text", "content": {"text": m}}, timeout=10)
+    except: pass
 
-def get_rr_tag(rr):
-    if rr >= 3: return "🔥 极佳机会 (盈亏比≥3)"
-    elif rr >= 2: return "✅ 优质机会 (盈亏比≥2)"
-    elif rr >= 1.8: return "⚠️ 一般机会 (盈亏比≥1.8，谨慎)"
-    else: return "❌ 盈亏比极差 (建议放弃)"
+def rt(r):
+    return "🔥 极佳机会 (盈亏比≥3)" if r >= 3 else "✅ 优质机会 (盈亏比≥2)" if r >= 2 else "⚠️ 一般机会 (盈亏比≥1.8，谨慎)" if r >= 1.8 else "❌ 盈亏比极差 (建议放弃)"
 
-def check_symbol(symbol, interval, btc_trend, alerts):
-    okx_sym, bnb_sym = f"{symbol}-USDT-SWAP", f"{symbol}USDT"
-    data, source = None, "OKX合约"
+def chk(sym, iv, bt, al):
+    ok = f"{sym}-USDT-SWAP"
+    d, src = None, "OKX合约"
     
     try:
-        r = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={bnb_sym}&interval={interval.lower()}&limit=300", headers=HEADERS, timeout=8).json()
-        if isinstance(r, list) and len(r) > 0: data, source = r, "Binance合约"
-    except Exception: pass
-    if data is None:
+        r = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}USDT&interval={iv.lower()}&limit=300", headers=H, timeout=8).json()
+        if isinstance(r, list) and r: d, src = r, "Binance合约"
+    except: pass
+    if d is None:
         try:
-            r = requests.get(f"https://www.okx.com/api/v5/market/candles?instId={okx_sym}&bar={interval}&limit=300", headers=HEADERS, timeout=10).json()
-            if r.get("code") == "0" and r.get("data"): data = r["data"]
-        except Exception: return
-    if not data: return
+            r = requests.get(f"https://www.okx.com/api/v5/market/candles?instId={ok}&bar={iv}&limit=300", headers=H, timeout=10).json()
+            if r.get("code") == "0" and r.get("data"): d = r["data"]
+        except: return
+    if not d: return
 
     try:
-        if source == "Binance合约":
-            df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','qav','num','tbbav','tbqav','ignore'])
-            vol_s = pd.to_numeric(df['qav'])
+        if src == "Binance合约":
+            df = pd.DataFrame(d, columns=['t','o','h','l','c','v','ct','q','n','tb','tq','i'])
+            vs = pd.to_numeric(df['q'])
         else:
-            df = pd.DataFrame(data, columns=["ts","open","high","low","close","vol","volCcy","volCcyQuote","confirm"]).iloc[::-1].reset_index(drop=True)
-            vol_s = pd.to_numeric(df['volCcyQuote'])
-        for c in ["open","high","low","close"]: df[c] = pd.to_numeric(df[c])
-    except Exception: return
+            df = pd.DataFrame(d, columns=["t","o","h","l","c","v","vc","vq","x"]).iloc[::-1].reset_index(drop=True)
+            vs = pd.to_numeric(df['vq'])
+        for c in "ohlc": df[c] = pd.to_numeric(df[c])
+    except: return
 
-    if vol_s.tail(96).sum() < 10000000: return
+    if vs.tail(96).sum() < 1e7: return
 
-    close, high, low = df["close"].iloc[:-1], df['high'].iloc[:-1], df['low'].iloc[:-1]
+    cl, hi, lo = df["c"].iloc[:-1], df['h'].iloc[:-1], df['l'].iloc[:-1]
 
     try:
-        ratio = float(df['volume'].iloc[-2]) / float(df['volume'].iloc[-22:-2].mean()) if float(df['volume'].iloc[-22:-2].mean()) > 0 else 1.0
-        if ratio >= 1.5:
-            vol_tag = f"🔥 爆量 ({ratio:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场"
-            vol_state = "爆量"
-        elif ratio <= 0.5:
-            vol_tag = f"💤 缩量 ({ratio:.1f}x) -> ⚠️ 主力未进场，假突破概率大，建议放弃"
-            vol_state = "缩量"
-        else:
-            vol_tag = f"➖ 平量 ({ratio:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作"
-            vol_state = "平量"
-    except Exception:
-        vol_tag, vol_state = "➖ 成交量未知", "未知"
+        rr_ = float(df['v'].iloc[-2]) / float(df['v'].iloc[-22:-2].mean()) if df['v'].iloc[-22:-2].mean() > 0 else 1
+        if rr_ >= 1.5: vt, vst = f"🔥 爆量 ({rr_:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场", "爆量"
+        elif rr_ <= 0.5: vt, vst = f"💤 缩量 ({rr_:.1f}x) -> ⚠️ 主力未进场，假突破概率大，建议放弃", "缩量"
+        else: vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作", "平量"
+    except: vt, vst = "➖ 成交量未知", "未知"
 
-    ema20, ema60, ema120 = [close.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
-    sma20, sma60, sma120 = [close.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
-    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-    mas = [ema20, ema60, ema120, sma20, sma60, sma120]
-    price, diff = close.iloc[-1], max(mas) - min(mas)
+    e20, e60, e120 = [cl.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
+    s20, s60, s120 = [cl.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
+    e200 = cl.ewm(span=200, adjust=False).mean().iloc[-1]
+    p, df_ = cl.iloc[-1], max([e20,e60,e120,s20,s60,s120]) - min([e20,e60,e120,s20,s60,s120])
 
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    tr = pd.concat([hi-lo, (hi-cl.shift(1)).abs(), (lo-cl.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean().iloc[-1]
-    base = THRESHOLD_CONFIG.get(interval, 0.004)
-    threshold = max(min((atr / price) * 0.4, base * 2), base * 0.5)
+    base = TC.get(iv, 0.004)
+    thr = max(min((atr/p)*0.4, base*2), base*0.5)
 
-    if diff / price > threshold: return
-    
-    if (df['high'].iloc[-2] - max(df['open'].iloc[-2], df['close'].iloc[-2])) > SHADOW_ATR_MULTIPLIER * atr or \
-       (min(df['open'].iloc[-2], df['close'].iloc[-2]) - df['low'].iloc[-2]) > SHADOW_ATR_MULTIPLIER * atr: return
+    if df_/p > thr: return
+    if (df['h'].iloc[-2] - max(df['o'].iloc[-2], df['c'].iloc[-2])) > SHM*atr or (min(df['o'].iloc[-2], df['c'].iloc[-2]) - df['l'].iloc[-2]) > SHM*atr: return
 
-    res, sup = high.tail(60).max(), low.tail(60).min()
-    l_sl, l_tp = price - SL_ATR_MULTIPLIER * atr, res
-    s_sl, s_tp = price + SL_ATR_MULTIPLIER * atr, sup
-    l_rr = (l_tp - price) / (price - l_sl) if price > l_sl else 0
-    s_rr = (price - s_tp) / (s_sl - price) if s_sl > price else 0
-    l_tag, s_tag = get_rr_tag(l_rr), get_rr_tag(s_rr)
-    
-    l_be, s_be = price + BE_ATR_MULTIPLIER * atr, price - BE_ATR_MULTIPLIER * atr
-    be_adv = f"🛡️ 保本(多): 涨至 ${l_be:.4f} 改止损至 ${price:.4f}\n🛡️ 保本(空): 跌至 ${s_be:.4f} 改止损至 ${price:.4f}"
-    
-    fr = get_funding_rate(okx_sym)
-    fund = f"⚠️ 资金费率 {fr*100:.3f}% 多头拥挤，慎多" if fr > 0.001 else f"⚠️ 资金费率 {fr*100:.3f}% 空头拥挤，慎空" if fr < -0.001 else ""
+    rs, sp = hi.tail(60).max(), lo.tail(60).min()
+    lsl, ltp = p - SLM*atr, rs
+    ssl, stp = p + SLM*atr, sp
+    lrr = (ltp-p)/(p-lsl) if p > lsl else 0
+    srr = (p-stp)/(ssl-p) if ssl > p else 0
+    lt, st = rt(lrr), rt(srr)
 
-    if price > ema200:
-        t_desc, t_note = "📈 多头趋势 (价格 > EMA200)", "✅ 顺势，优先做多" if btc_trend else "⚠️ 大盘偏空，逆势做多风险大"
-        b_note = "" if btc_trend else " (BTC警告)"
-        is_trend_ok = btc_trend
+    lbe, sbe = p + BEM*atr, p - BEM*atr
+    be = f"🛡️ 保本提示 (做多): 当价格涨至 ${lbe:.4f} 时，请将止损移至开仓价 ${p:.4f}\n🛡️ 保本提示 (做空): 当价格跌至 ${sbe:.4f} 时，请将止损移至开仓价 ${p:.4f}"
+
+    fr = fund(ok)
+    fn = f"⚠️ 资金费率 {fr*100:.3f}% 多头拥挤，慎多" if fr > 0.001 else f"⚠️ 资金费率 {fr*100:.3f}% 空头拥挤，慎空" if fr < -0.001 else ""
+
+    if p > e200:
+        td, tn = "📈 多头趋势 (价格 > EMA200)", "✅ 顺势，优先考虑做多" if bt else "⚠️ 大盘偏空 (BTC < EMA200)，逆势做多风险大"
+        bn = "" if bt else " (BTC警告)"
+        itok = bt
     else:
-        t_desc, t_note = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先做空" if not btc_trend else "⚠️ 大盘偏多，逆势做空风险大"
-        b_note = "" if not btc_trend else " (BTC警告)"
-        is_trend_ok = not btc_trend
-    
-    advice = f"📈 做多: 止损 ${l_sl:.4f} / 止盈 ${l_tp:.4f} (RR: {l_rr:.2f}) {l_tag}\n📉 做空: 止损 ${s_sl:.4f} / 止盈 ${s_tp:.4f} (RR: {s_rr:.2f}) {s_tag}"
-    if fund: advice += f"\n💰 {fund}"
-    
-    if l_rr >= 1.8 and l_rr >= s_rr:
-        primary = f"🎯 首选建议：做多 (RR {l_rr:.2f}) {l_tag}"
-        rr_val, rr_ok = l_rr, (l_rr >= 2)
-    elif s_rr >= 1.8 and s_rr > l_rr:
-        primary = f"🎯 首选建议：做空 (RR {s_rr:.2f}) {s_tag}"
-        rr_val, rr_ok = s_rr, (s_rr >= 2)
-    else:
-        primary = "⚠️ 方向不明确，盈亏比均较低，建议观望"
-        rr_val, rr_ok = 0, False
-    
-    if rr_val == 0: summary = "❌ 不能做（方向不明确）"
-    elif vol_state == "缩量": summary = "❌ 不能做（主力未进场，假突破）"
-    elif vol_state == "爆量" and is_trend_ok and rr_ok: summary = "✅ 能做（正常仓位，1%风险）"
-    elif vol_state == "平量" or not is_trend_ok or not rr_ok: summary = "⚠️ 能做（减半仓位，0.5%风险）"
-    else: summary = "✅ 能做（正常仓位）"
+        td, tn = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先考虑做空" if not bt else "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大"
+        bn = "" if not bt else " (BTC警告)"
+        itok = not bt
 
-    alerts.append(
-        f"{symbol} [{interval}] 六线差值:${diff:.4f} (价差:{diff/price:.2%}) 当前价:${price:.4f} ({source})\n"
-        f"📊 成交量: {vol_tag}\n"
-        f"{primary}\n"
-        f"📋 综合评级：{summary}\n\n"
-        f"🔴 压力位: ${res:.4f} / 🟢 支撑位: ${sup:.4f}\n\n"
-        f"🧭 趋势状态: {t_desc} ({t_note}){b_note}\n\n{advice}\n\n{be_adv}"
+    adv = f"📈 做多: 止损 ${lsl:.4f} / 止盈 ${ltp:.4f} (RR: {lrr:.2f}) {lt}\n📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}"
+    if fn: adv += f"\n💰 {fn}"
+
+    if lrr >= 1.8 and lrr >= srr: pri, rv, rok = f"🎯 首选建议：做多 (RR {lrr:.2f}) {lt}", lrr, lrr >= 2
+    elif srr >= 1.8 and srr > lrr: pri, rv, rok = f"🎯 首选建议：做空 (RR {srr:.2f}) {st}", srr, srr >= 2
+    else: pri, rv, rok = "⚠️ 方向不明确，盈亏比均较低，建议观望", 0, False
+
+    if rv == 0: sm = "❌ 不能做（方向不明确）"
+    elif vst == "缩量": sm = "❌ 不能做（主力未进场，假突破）"
+    elif vst == "爆量" and itok and rok: sm = "✅ 能做（正常仓位，1%风险）"
+    elif vst == "平量" or not itok or not rok: sm = "⚠️ 能做（减半仓位，0.5%风险）"
+    else: sm = "✅ 能做（正常仓位）"
+
+    al.append(
+        f"{sym} [{iv}] ({src})\n"
+        f"💰 当前价: ${p:.4f}\n"
+        f"📉 六线差值: ${df_:.4f} (价差:{df_/p:.2%})\n"
+        f"📊 成交量: {vt}\n"
+        f"{pri}\n"
+        f"📋 综合评级：{sm}\n\n"
+        f"🔴 压力位: ${rs:.4f}\n"
+        f"🟢 支撑位: ${sp:.4f}\n\n"
+        f"🧭 趋势状态: {td} ({tn}){bn}\n\n"
+        f"{adv}\n\n"
+        f"{be}"
     )
 
 if __name__ == "__main__":
-    if not FEISHU_WEBHOOK: print("缺少飞书 Webhook")
+    if not WH: print("缺少Webhook")
     else:
-        btc_trend = get_btc_trend()
-        syms = get_coingecko_symbols()
-        swaps = get_okx_swap_symbols()
-        if not syms or not swaps: print("获取失败，跳过")
+        bt = btc_t()
+        ss = cg()
+        sw = okx()
+        if not ss or not sw: print("获取失败")
         else:
             exc = ["USDC","USD1","USDG","PYUSD","RLUSD","USDT","USDS","USDe","DAI","BUSD","FDUSD","TUSD","USDP","GUSD","FRAX","USDD","USAT","NFT","AINFT"]
-            final = [s for s in syms if s not in exc and s in swaps][:200]
-            print(f"✅ 本次最终监控合约币种数量: {len(final)}")
-            bj_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
-            for iv in INTERVALS:
-                if not is_time_to_check(iv): continue
-                print(f"正在检查周期: {iv}...")
-                batch = []
-                for s in final:
-                    check_symbol(s, iv, btc_trend, batch); time.sleep(0.15)
-                if batch:
-                    header = f"🚨 {iv} 周期六线粘合警报! (北京时间: {bj_time})\n\n"
-                    msg = header + "\n\n".join(batch)
-                    send_feishu(msg[:3000] + "\n... (过长已截断)" if len(msg) > 3000 else msg)
-                    print(f"✅ {iv} 周期已发送 {len(batch)} 个警报")
+            fin = [s for s in ss if s not in exc and s in sw][:200]
+            print(f"✅ 本次最终监控合约币种数量: {len(fin)}")
+            bjt = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+            for iv in IVS:
+                if not ok_t(iv): continue
+                b = []
+                for s in fin:
+                    chk(s, iv, bt, b); time.sleep(0.15)
+                if b:
+                    for i in range(0, len(b), 5):
+                        send(f"🚨 {iv} 周期六线粘合警报! (北京时间: {bjt})\n\n" + "\n\n".join(b[i:i+5]))
+                    print(f"✅ {iv} 周期已发送 {len(b)} 个警报")
             print("本次所有周期检查完毕。")
