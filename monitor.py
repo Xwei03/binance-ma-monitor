@@ -93,18 +93,18 @@ def check_symbol(symbol, interval, btc_trend, alerts):
     if vol_s.tail(96).sum() < 10000000: return
 
     close, high, low = df["close"].iloc[:-1], df['high'].iloc[:-1], df['low'].iloc[:-1]
-    
-    try:
-        ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
-        dif = ema12 - ema26; dea = dif.ewm(span=9, adjust=False).mean()
-        cross = "金叉" if (dif.iloc[-2] <= dea.iloc[-2] and dif.iloc[-1] > dea.iloc[-1]) else "死叉" if (dif.iloc[-2] >= dea.iloc[-2] and dif.iloc[-1] < dea.iloc[-1]) else "无"
-        macd_tag = f"🟢 金叉 (零轴{'上' if dif.iloc[-1]>0 else '下'}方)" if cross == "金叉" else f"🔴 死叉 (零轴{'上' if dif.iloc[-1]>0 else '下'}方)" if cross == "死叉" else "➖ 无明显交叉"
-    except Exception: macd_tag = "➖ MACD 未知"
 
+    # 成交量详细标签（带主力进场提示）
     try:
         ratio = float(df['volume'].iloc[-2]) / float(df['volume'].iloc[-22:-2].mean()) if float(df['volume'].iloc[-22:-2].mean()) > 0 else 1.0
-        vol_tag = f"🔥 爆量 ({ratio:.1f}x)" if ratio >= 1.5 else f"💤 缩量 ({ratio:.1f}x)" if ratio <= 0.5 else f"➖ 平量 ({ratio:.1f}x)"
-    except Exception: vol_tag = "➖ 未知"
+        if ratio >= 1.5:
+            vol_tag = f"🔥 爆量 ({ratio:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场"
+        elif ratio <= 0.5:
+            vol_tag = f"💤 缩量 ({ratio:.1f}x) -> ⚠️ 主力未进场，假突破概率大，建议放弃"
+        else:
+            vol_tag = f"➖ 平量 ({ratio:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作"
+    except Exception:
+        vol_tag = "➖ 成交量未知"
 
     ema20, ema60, ema120 = [close.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
     sma20, sma60, sma120 = [close.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
@@ -151,7 +151,7 @@ def check_symbol(symbol, interval, btc_trend, alerts):
 
     alerts.append(
         f"{symbol} [{interval}] 六线差值:${diff:.4f} (价差:{diff/price:.2%}) 当前价:${price:.4f} ({source})\n"
-        f"📊 成交量: {vol_tag} | 📉 MACD: {macd_tag}\n"
+        f"📊 成交量: {vol_tag}\n"
         f"{primary}\n\n🔴 压力位: ${res:.4f} / 🟢 支撑位: ${sup:.4f}\n\n"
         f"🧭 趋势状态: {t_desc} ({t_note}){b_note}\n\n{advice}\n\n{be_adv}"
     )
