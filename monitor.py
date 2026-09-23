@@ -247,10 +247,18 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         if funding_note:
             trade_advice += f"\n💰 {funding_note}"
         
-        # 排版：用双换行符 \n\n 制造空行，让阅读更清晰
+        # ================= 新增：首选方向判断 =================
+        if long_rr > short_rr:
+            primary_direction = f"🎯 首选建议：做多 (RR {long_rr:.2f}) {long_tag}"
+        else:
+            primary_direction = f"🎯 首选建议：做空 (RR {short_rr:.2f}) {short_tag}"
+        # ======================================================
+
+        # 根据你的模板精确排版
         alert_list.append(
             f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})\n"
-            f"📊 成交量: {vol_tag}\n\n"
+            f"📊 成交量: {vol_tag}\n"
+            f"{primary_direction}\n\n"
             f"🔴 压力位: ${resistance:.4f} / 🟢 支撑位: ${support:.4f}\n\n"
             f"🧭 趋势状态: {trend_desc} ({trade_note}){btc_note}\n\n"
             f"{trade_advice}\n\n"
@@ -294,7 +302,6 @@ if __name__ == "__main__":
                     time.sleep(0.15)
                 
                 if period_alert_list:
-                    # 标题加上双换行，与第一条警报隔开
                     header = f"🚨 {iv} 周期六线粘合警报! (北京时间: {bj_time})\n\n"
                     body = "\n\n".join(period_alert_list)
                     full_msg = header + body
