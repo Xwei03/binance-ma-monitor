@@ -8,7 +8,7 @@ H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 def ok_t(iv):
     n = datetime.datetime.utcnow()
-    return (n.hour == 0 and n.minute < 30) if iv == "1D" else (n.hour % 4 == 0 and n.minute < 30) if iv == "4H" else (n.minute < 30) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
+    return (n.hour == 0 and n.minute < 30) if iv == "1D" else (n.hour % 4 == 0 and n.minute < 30) if iv == "4H" else (n.minute < 15) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
 
 def btc_t():
     try:
