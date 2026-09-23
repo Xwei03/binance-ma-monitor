@@ -15,7 +15,8 @@ THRESHOLD_CONFIG = {
     "15m": 0.003, "1H": 0.005, "4H": 0.015, "1D": 0.035
 }
 
-SL_ATR_MULTIPLIER = 2.0
+# 【核心修改】止损倍数从 2.0 改为 2.5，防止被主力插针扫损
+SL_ATR_MULTIPLIER = 2.5
 BE_ATR_MULTIPLIER = 0.5
 SHADOW_ATR_MULTIPLIER = 2.0
 
