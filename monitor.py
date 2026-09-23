@@ -247,14 +247,15 @@ def check_symbol(symbol, interval, btc_trend, alert_list):
         if funding_note:
             trade_advice += f"\n💰 {funding_note}"
         
-        # ================= 新增：首选方向判断 =================
-        if long_rr > short_rr:
+        # 智能多空决策系统
+        if long_rr >= 2 and long_rr >= short_rr:
             primary_direction = f"🎯 首选建议：做多 (RR {long_rr:.2f}) {long_tag}"
-        else:
+        elif short_rr >= 2 and short_rr > long_rr:
             primary_direction = f"🎯 首选建议：做空 (RR {short_rr:.2f}) {short_tag}"
-        # ======================================================
+        else:
+            primary_direction = "⚠️ 方向不明确，盈亏比均较低，建议观望，等待更优位置"
 
-        # 根据你的模板精确排版
+        # 排版
         alert_list.append(
             f"{symbol} [{interval}] 六线差值:${diff_value:.4f} (价差:{max_spread:.2%}) 当前价:${price:.4f} ({data_source})\n"
             f"📊 成交量: {vol_tag}\n"
