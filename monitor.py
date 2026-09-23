@@ -79,7 +79,7 @@ def chk(sym, iv, bt, al):
         if rr_ >= 1.5:
             vt, vst = f"🔥 爆量 ({rr_:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场", "爆量"
         elif rr_ <= 0.5:
-            return  # 缩量直接放弃（提升胜率）
+            return  # 缩量直接放弃
         else:
             vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作", "平量"
     except:
@@ -101,7 +101,7 @@ def chk(sym, iv, bt, al):
     rs, sp = hi.tail(60).max(), lo.tail(60).min()
     lsl, ssl = p - SLM*atr, p + SLM*atr
     
-    # 止盈优化：保守价 + ATR止盈 取更优
+    # 止盈优化
     ltp = max(rs * 0.995, p + 2.5 * atr)
     stp = min(sp * 1.005, p - 2.5 * atr)
     lrr = (ltp-p)/(p-lsl) if p > lsl else 0
@@ -122,13 +122,15 @@ def chk(sym, iv, bt, al):
            f"📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}")
     if fn: adv += f"\n💰 {fn}"
 
-    if lrr >= 1.8 and lrr >= srr and (itok or lrr >= 2.5):
+    # 方向选择（顺势优先，逆势需更高RR）
+    if lrr >= 1.8 and lrr >= srr and (itok or lrr >= 2.6):
         pri, rv, rok = f"🎯 首选建议：做多 (RR {lrr:.2f}) {lt}", lrr, lrr >= 2
-    elif srr >= 1.8 and srr > lrr and (itok or srr >= 2.5):
+    elif srr >= 1.8 and srr > lrr and (itok or srr >= 2.6):
         pri, rv, rok = f"🎯 首选建议：做空 (RR {srr:.2f}) {st}", srr, srr >= 2
     else:
         return
 
+    # 综合评级（在保证胜率的前提下尽量提高频率）
     if vst == "爆量" and itok and rok:
         sm = "✅ 能做（正常仓位，1%风险）"
     elif vst == "爆量" and rok:
