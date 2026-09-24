@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install
-        run: pip install requests pandas
+        run: pip install requests pandas websocket-client
       - name: Run
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
