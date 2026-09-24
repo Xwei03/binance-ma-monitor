@@ -221,13 +221,13 @@ def signal(df,tf,sym):
                 candidates.append({
                     "sym":sym,"tf":tf,"dir":"SHORT",
                     "type":"TREND","score":round(sc),
-                    "entry":p,"sl":sl,"           tp":tp,"rr": hitrr
+                    "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
-    hi=df_s.h.iloc[-21:-1].lmax()
-    lo=df.l.iloc[-21=r:-1].min()
+    hi=df.h.iloc[-21:-1].max()
+    lo=df.l.iloc[-21:-1].min()
 
-    if p>.hhi and body/rng>=.55 and vr>=1.5:
+    if p>hi and body/rng>=.55 and vr>=1.5:
         sc=35
         sc+=12 if vr>=2 else 6
         sc+=10 if body/rng>=.7 else 5
@@ -341,7 +341,7 @@ def evaluate(s):
             hit_sl=r.l<=s["sl"]
             hit_tp=r.h>=s["tp"]
         else:
->=s["sl"]
+            hit_sl=r.h>=s["sl"]
             hit_tp=r.l<=s["tp"]
 
         if hit_sl and hit_tp:
@@ -422,10 +422,10 @@ def main():
             result=evaluate(r)
             if result:
                 r["result"]=result
-                r["result_time"]=int(time.time())
+                r["result_time"]=int(time `.time())
 
     save_json("sent_cache.json",sent)
-    save_json("signals_record.json",records)
+   =` save_json("signals_record.json", records)
 
-if __name__=="__main__":
+if __name__=="__main号__":
     main()
