@@ -76,14 +76,10 @@ def chk(sym, iv, bt, al):
 
     try:
         rr_ = float(df['v'].iloc[-2]) / float(df['v'].iloc[-22:-2].mean()) if df['v'].iloc[-22:-2].mean() > 0 else 1
-        if rr_ >= 1.5:
-            vt, vst = f"🔥 爆量 ({rr_:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场", "爆量"
-        elif rr_ <= 0.5:
-            return  # 缩量直接放弃
-        else:
-            vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作", "平量"
-    except:
-        vt, vst = "➖ 成交量未知", "未知"
+        if rr_ >= 1.5: vt, vst = f"🔥 爆量 ({rr_:.1f}x) -> ✅ 主力进场，真突破概率大，可顺势入场", "爆量"
+        elif rr_ <= 0.5: vt, vst = f"💤 缩量 ({rr_:.1f}x) -> ⚠️ 主力未进场，假突破概率大，建议放弃", "缩量"
+        else: vt, vst = f"➖ 平量 ({rr_:.1f}x) -> ⚠️ 资金分歧，需结合趋势谨慎操作", "平量"
+    except: vt, vst = "➖ 成交量未知", "未知"
 
     e20, e60, e120 = [cl.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
     s20, s60, s120 = [cl.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
@@ -101,9 +97,9 @@ def chk(sym, iv, bt, al):
     rs, sp = hi.tail(60).max(), lo.tail(60).min()
     lsl, ssl = p - SLM*atr, p + SLM*atr
     
-    # 止盈优化
-    ltp = max(rs * 0.995, p + 2.5 * atr)
-    stp = min(sp * 1.005, p - 2.5 * atr)
+    # 【核心修改】直接用保守价作为止盈，并重新计算盈亏比
+    ltp = rs * 0.995
+    stp = sp * 1.005
     lrr = (ltp-p)/(p-lsl) if p > lsl else 0
     srr = (p-stp)/(ssl-p) if ssl > p else 0
     lt, st = rt(lrr), rt(srr)
@@ -118,27 +114,20 @@ def chk(sym, iv, bt, al):
     else:
         td, tn, bn, itok = "📉 空头趋势 (价格 < EMA200)", "✅ 顺势，优先考虑做空" if not bt else "⚠️ 大盘偏多 (BTC > EMA200)，逆势做空风险大", "" if not bt else " (BTC警告)", not bt
 
+    # 警报里直接显示保守止盈价
     adv = (f"📈 做多: 止损 ${lsl:.4f} / 止盈 ${ltp:.4f} (RR: {lrr:.2f}) {lt}\n"
            f"📉 做空: 止损 ${ssl:.4f} / 止盈 ${stp:.4f} (RR: {srr:.2f}) {st}")
     if fn: adv += f"\n💰 {fn}"
 
-    # 方向选择（顺势优先，逆势需更高RR）
-    if lrr >= 1.8 and lrr >= srr and (itok or lrr >= 2.6):
-        pri, rv, rok = f"🎯 首选建议：做多 (RR {lrr:.2f}) {lt}", lrr, lrr >= 2
-    elif srr >= 1.8 and srr > lrr and (itok or srr >= 2.6):
-        pri, rv, rok = f"🎯 首选建议：做空 (RR {srr:.2f}) {st}", srr, srr >= 2
-    else:
-        return
+    if lrr >= 1.8 and lrr >= srr: pri, rv, rok = f"🎯 首选建议：做多 (RR {lrr:.2f}) {lt}", lrr, lrr >= 2
+    elif srr >= 1.8 and srr > lrr: pri, rv, rok = f"🎯 首选建议：做空 (RR {srr:.2f}) {st}", srr, srr >= 2
+    else: pri, rv, rok = "⚠️ 方向不明确，盈亏比均较低，建议观望", 0, False
 
-    # 综合评级（在保证胜率的前提下尽量提高频率）
-    if vst == "爆量" and itok and rok:
-        sm = "✅ 能做（正常仓位，1%风险）"
-    elif vst == "爆量" and rok:
-        sm = "⚠️ 能做（减半仓位，0.5%风险）- 逆势谨慎"
-    elif vst == "平量" and itok and rok:
-        sm = "⚠️ 能做（减半仓位，0.5%风险）"
-    else:
-        return
+    if rv == 0: sm = "❌ 不能做（方向不明确）"
+    elif vst == "缩量": sm = "❌ 不能做（主力未进场，假突破）"
+    elif vst == "爆量" and itok and rok: sm = "✅ 能做（正常仓位，1%风险）"
+    elif vst == "平量" or not itok or not rok: sm = "⚠️ 能做（减半仓位，0.5%风险）"
+    else: sm = "✅ 能做（正常仓位）"
 
     al.append(
         f"{sym} [{iv}] ({src})\n"
