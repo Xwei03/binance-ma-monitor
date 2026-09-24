@@ -5,7 +5,7 @@ IVS = ["15m", "30m", "1H", "4H", "1D"]
 MAX_COINS = 150
 API_GAP, FEISHU_GAP = 0.3, 1.5
 last_api, last_msg = 0, 0
-fund_cache, sent = {}, set()
+fund_cache, sent = {}, {}
 
 H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 S = requests.Session(); S.headers.update(H)
@@ -57,7 +57,7 @@ def coins():
 
 def ok_t(iv):
     n = datetime.datetime.utcnow()
-    return (n.hour == 0 and n.minute < 30) if iv == "1D" else (n.hour % 4 == 0 and n.minute < 30) if iv == "4H" else (n.minute < 15) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
+    return (n.hour == 0 and n.minute < 30) if iv == "1D" else (n.hour % 4 == 0 and n.minute < 30) if iv == "4H" else (n.minute < 30) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
 
 def candles(sym, iv):
     d = get(f"https://www.okx.com/api/v5/market/candles", {"instId": f"{sym}-USDT-SWAP", "bar": iv, "limit": 230}, 12)
@@ -101,6 +101,7 @@ def score(df, iv, direction, btc):
     x = calc(df)
     p, s, reasons = x["p"], 0, []
     if p <= 0 or x["atr"] <= 0: return None
+    if x["vr"] < 0.5: return None
 
     if direction == "LONG":
         if p > x["e200"]: s += 15; reasons.append("EMA200多头")
@@ -118,7 +119,6 @@ def score(df, iv, direction, btc):
     if x["vr"] >= 1.8: s += 12; reasons.append("爆量")
     elif x["vr"] >= 1.35: s += 9; reasons.append("放量")
     elif x["vr"] >= .8: s += 5
-    elif x["vr"] < .5: s -= 8
 
     ph, pl = df["h"].iloc[-21:-1].max(), df["l"].iloc[-21:-1].min()
     if direction == "LONG" and p > ph: s += 15; reasons.append("突破前高")
@@ -159,17 +159,21 @@ def signal(sym, iv, btc):
         tp = hi * 0.995
         be = p + BEM*atr
         rr = (tp - p) / (p - sl) if p > sl else 0
+        itok = p > x["e200"]
     else:
         sl = p + SLM*atr
         tp = lo * 1.005
         be = p - BEM*atr
         rr = (p - tp) / (sl - p) if sl > p else 0
+        itok = p < x["e200"]
 
-    if rr < 1.5: return None
-    state = "🟢 可以交易" if base_score >= MIN_SCORE[iv] else "🟡 谨慎交易"
+    if itok:
+        if rr < 1.8: return None
+    else:
+        if rr < 2.5: return None
 
-    return {"sym":sym, "iv":iv, "direction":direction, "score":base_score, "state":state,
-            "p":p, "sl":sl, "tp":tp, "rr":rr, "be":be, "fr":fr, "vr":x["vr"], "spread":x["spread"], "reasons":reasons}
+    return {"sym":sym, "iv":iv, "direction":direction, "score":base_score,
+            "p":p, "sl":sl, "tp":tp, "rr":rr, "be":be, "fr":fr, "vr":x["vr"], "spread":x["spread"], "reasons":reasons, "itok":itok}
 
 def send(text):
     global last_msg
@@ -192,14 +196,15 @@ def format_msg(x, btc):
     reason = "、".join(x["reasons"][:5]) or "综合条件"
     dir_emoji = "🟢 做多" if x["direction"]=="LONG" else "🔴 做空"
     dir_text = "做多" if x["direction"]=="LONG" else "做空"
+    trend_tag = "✅ 顺势" if x["itok"] else "⚠️ 逆势"
 
     return (
         f"🚨 {x['iv']} 周期信号\n{x['sym']} (OKX)\n\n"
-        f"{dir_emoji}｜{x['state']}\n"
+        f"{dir_emoji}｜{trend_tag}\n"
         f"🎯 综合评分：{x['score']}/100\n"
         f"💰 当前价：${x['p']:.6f}\n"
         f"{vol}\n"
-        f"📐 六线差：{x['spread']:.2%}\n"
+        f"📐 均线差：{x['spread']:.2%}\n"
         f"🔎 条件：{reason}\n"
         f"₿ BTC：{'偏多' if btc else '偏空'}\n"
         f"💵 资金费率：{x['fr']*100:.4f}%\n\n"
@@ -212,13 +217,14 @@ def format_msg(x, btc):
 
 def main():
     if not WH: print("⛔ 缺少 FEISHU_WEBHOOK"); return
-    print("🚀 融合终极版启动")
+    print("🚀 终极平衡完美版启动")
     symbols = coins()
     if not symbols: print("⛔ 获取币种失败"); return
     print(f"✅ 监控 {len(symbols)} 个高流动性合约")
     btc = btc_trend()
     print("₿ BTC：", "偏多" if btc else "偏空")
 
+    now_ts = time.time()
     for iv in IVS:
         if not ok_t(iv): continue
         print(f"\n========== {iv} ==========")
@@ -228,8 +234,9 @@ def main():
                 x = signal(sym, iv, btc)
                 if not x: continue
                 key = (x["sym"], x["iv"], x["direction"])
-                if key in sent: continue
-                sent.add(key)
+                if key in sent and now_ts - sent[key] < 1800:
+                    continue
+                sent[key] = now_ts
                 results.append(x)
                 if iv == "15m":
                     if send(format_msg(x, btc)): print(f"📨 发送 {sym} {x['direction']} {x['score']}")
@@ -237,7 +244,7 @@ def main():
 
         if iv != "15m" and results:
             results.sort(key=lambda x:x["score"], reverse=True)
-            for x in results[:20]:
+            for x in results[:10]:
                 if send(format_msg(x, btc)): print(f"📨 发送 {x['sym']} {x['direction']} {x['score']}")
         print(f"✅ {iv}完成：{len(results)} 个信号")
     print("🏁 全部周期检查完成")
