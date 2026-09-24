@@ -294,18 +294,21 @@ def fmt(x):
     return f"{x:.8g}"
 
 def signal_msg(s):
+    tf_map={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
+    type_map={"TREND":"趋势","BREAKOUT":"突破"}
+    dir_map={"LONG":"做多","SHORT":"做空"}
     return (
         "OKX信号\n"
         f"币种：{s['sym']}\n"
-        f"周期：{s['tf']}\n"
-        f"类型：{s['type']}\n"
-        f"方向：{s['dir']}\n"
+        f"周期：{tf_map.get(s['tf'],s['tf'])}\n"
+        f"类型：{type_map.get(s['type'],s['type'])}\n"
+        f"方向：{dir_map.get(s['dir'],s['dir'])}\n"
         f"评分：{s['score']}\n"
         f"入场：{fmt(s['entry'])}\n"
         f"止损：{fmt(s['sl'])}\n"
         f"止盈：{fmt(s['tp'])}\n"
-        f"RR：{s['rr']:.2f}\n"
-        f"UTC：{s['time']}"
+        f"盈亏比：{s['rr']:.2f}\n"
+        f"时间：{s['time']}"
     )
 
 def key(s):
