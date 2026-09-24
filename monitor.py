@@ -66,7 +66,7 @@ def get(path,params=None,retry=3):
     return None
 
 def candles(sym,bar,limit=250):
-    k=f"{sym}_{bar}"
+    k=sym+"_"+bar
     now=time.time()
     if k in caches and now-caches[k][0]<35:
         return caches[k][1]
@@ -91,11 +91,11 @@ def ema(s,n):
     return s.ewm(span=n,adjust=False).mean()
 
 def atr(df,n=14):
-    pc=df.c.shift()
+    pc=df["c"].shift()
     tr=pd.concat([
-        df.h-df.l,
-        (df.h-pc).abs(),
-        (df.l-pc).abs()
+        df["h"]-df["l"],
+        (df["h"]-pc).abs(),
+        (df["l"]-pc).abs()
     ],axis=1).max(axis=1)
     return tr.rolling(n).mean()
 
@@ -106,8 +106,8 @@ def btc(bar):
     if df is None or len(df)<205:
         btc_cache[bar]=(time.time(),0)
         return 0
-    e=ema(df.c,200).iloc[-1]
-    p=df.c.iloc[-1]
+    e=ema(df["c"],200).iloc[-1]
+    p=df["c"].iloc[-1]
     s=6 if p>e else -6
     btc_cache[bar]=(time.time(),s)
     return s
@@ -162,20 +162,20 @@ def signal(df,tf,sym):
     if df is None or len(df)<210:
         return None
 
-    p=df.c.iloc[-1]
-    e20=ema(df.c,20).iloc[-1]
-    e60=ema(df.c,60).iloc[-1]
-    e120=ema(df.c,120).iloc[-1]
-    e200=ema(df.c,200).iloc[-1]
+    p=df["c"].iloc[-1]
+    e20=ema(df["c"],20).iloc[-1]
+    e60=ema(df["c"],60).iloc[-1]
+    e120=ema(df["c"],120).iloc[-1]
+    e200=ema(df["c"],200).iloc[-1]
     a=atr(df).iloc[-1]
 
     if not a or a<=0:
         return None
 
-    body=abs(df.c.iloc[-1]-df.o.iloc[-1])
-    rng=max(df.h.iloc[-1]-df.l.iloc[-1],a*.01)
-    vol=df.v.iloc[-1]
-    vmean=df.v.iloc[-21:-1].mean()
+    body=abs(df["c"].iloc[-1]-df["o"].iloc[-1])
+    rng=max(df["h"].iloc[-1]-df["l"].iloc[-1],a*.01)
+    vol=df["v"].iloc[-1]
+    vmean=df["v"].iloc[-21:-1].mean()
     vr=vol/vmean if vmean>0 else 0
     spread=abs(e20-e60)/p*100
     btc_s=btc(TF[tf]["bar"])
@@ -194,7 +194,7 @@ def signal(df,tf,sym):
             sc-=5 if f>.08 else 3 if f>.05 else 0
         if sc>=TF[tf]["score"]:
             sl=p-2.5*a
-            tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
+            tp=min(df["h"].iloc[-61:-1].max()*.995,p+3*a)
             rr=(tp-p)/(p-sl) if p>sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -215,7 +215,7 @@ def signal(df,tf,sym):
             sc-=5 if f<-.08 else 3 if f<-.05 else 0
         if sc>=TF[tf]["score"]:
             sl=p+2.5*a
-            tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
+            tp=max(df["l"].iloc[-61:-1].min()*1.005,p-3*a)
             rr=(p-tp)/(sl-p) if p<sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -224,8 +224,8 @@ def signal(df,tf,sym):
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
-    hi=df.h.iloc[-21:-1].max()
-    lo=df.l.iloc[-21:-1].min()
+    hi=df["h"].iloc[-21:-1].max()
+    lo=df["l"].iloc[-21:-1].min()
 
     if p>hi and body/rng>=.55 and vr>=1.5:
         sc=35
@@ -236,7 +236,7 @@ def signal(df,tf,sym):
         sc+=5 if p>e20 else 0
         if sc>=TF[tf]["score"]:
             sl=p-2.5*a
-            tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
+            tp=min(df["h"].iloc[-61:-1].max()*.995,p+3*a)
             rr=(tp-p)/(p-sl) if p>sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -254,7 +254,7 @@ def signal(df,tf,sym):
         sc+=5 if p<e20 else 0
         if sc>=TF[tf]["score"]:
             sl=p+2.5*a
-            tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
+            tp=max(df["l"].iloc[-61:-1].min()*1.005,p-3*a)
             rr=(p-tp)/(sl-p) if p<sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -306,21 +306,21 @@ def fmt(x):
 def signal_msg(s):
     return (
         "OKX信号\n"
-        f"币种：{s['sym']}\n"
-        f"周期：{s['tf']}\n"
-        f"类型：{s['type']}\n"
-        f"方向：{s['dir']}\n"
-        f"评分：{s['score']}\n"
-        f"入场：{fmt(s['entry'])}\n"
-        f"止损：{fmt(s['sl'])}\n"
-        f"止盈：{fmt(s['tp'])}\n"
-        f"RR：{s['rr']:.2f}\n"
-        f"共振：{s.get('res','无')}\n"
-        f"UTC：{s['time']}"
+        "币种："+s["sym"]+"\n"
+        "周期："+s["tf"]+"\n"
+        "类型："+s["type"]+"\n"
+        "方向："+s["dir"]+"\n"
+        "评分："+str(s["score"])+"\n"
+        "入场："+fmt(s["entry"])+"\n"
+        "止损："+fmt(s["sl"])+"\n"
+        "止盈："+fmt(s["tp"])+"\n"
+        "RR："+f"{s['rr']:.2f}"+"\n"
+        "共振："+s.get("res","无")+"\n"
+        "UTC："+s["time"]
     )
 
 def key(s):
-    return f"{s['sym']}|{s['tf']}|{s['dir']}|{s['type']}|{s['ts']}"
+    return s["sym"]+"|"+s["tf"]+"|"+s["dir"]+"|"+s["type"]+"|"+str(s["ts"])
 
 def evaluate(s):
     exp=TF[s["tf"]]["exp"]
@@ -329,7 +329,7 @@ def evaluate(s):
         return None
 
     start=s["ts"]
-    future=df[df.ts>start]
+    future=df[df["ts"]>start]
     if future.empty:
         return None
 
@@ -338,11 +338,11 @@ def evaluate(s):
 
     for _,r in future.iterrows():
         if s["dir"]=="LONG":
-            hit_sl=r.l<=s["sl"]
-            hit_tp=r.h>=s["tp"]
+            hit_sl=r["l"]<=s["sl"]
+            hit_tp=r["h"]>=s["tp"]
         else:
-            hit_sl=r.h>=s["sl"]
-            hit_tp=r.l<=s["tp"]
+            hit_sl=r["h"]>=s["sl"]
+            hit_tp=r["l"]<=s["tp"]
 
         if hit_sl and hit_tp:
             return "LOSS"
@@ -376,7 +376,7 @@ def main():
         if not ok_t(tf):
             continue
 
-        print(f"扫描周期 {tf}...")
+        print("扫描周期 "+tf+"...")
         period_signals=[]
 
         for sym in syms:
@@ -387,7 +387,7 @@ def main():
             s=signal(df,tf,sym)
 
             if s:
-                s["ts"]=int(df.ts.iloc[-1])
+                s["ts"]=int(df["ts"].iloc[-1])
                 s["time"]=datetime.fromtimestamp(
                     s["ts"]/1000,timezone.utc
                 ).strftime("%Y-%m-%d %H:%M")
@@ -422,10 +422,10 @@ def main():
             result=evaluate(r)
             if result:
                 r["result"]=result
-                r["result_time"]=int(time `.time())
+                r["result_time"]=int(time.time())
 
     save_json("sent_cache.json",sent)
-   =` save_json("signals_record.json", records)
+    save_json("signals_record.json",records)
 
-if __name__=="__main号__":
+if __name__=="__main__":
     main()
