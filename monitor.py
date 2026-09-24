@@ -11,7 +11,8 @@ H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 S = requests.Session(); S.headers.update(H)
 
 SLM, BEM = 2.5, 0.5
-MIN_SCORE = {"15m": 75, "30m": 75, "1H": 76, "4H": 78, "1D": 80}
+# 去掉突破分后，评分门槛相应下调5分，保证正常频率
+MIN_SCORE = {"15m": 70, "30m": 70, "1H": 72, "4H": 74, "1D": 76}
 EXCLUDE = {"USDT","USDC","USD1","USDG","PYUSD","RLUSD","USDS","USDE","DAI","BUSD","FDUSD","TUSD","USDP","GUSD","FRAX","USDD","USAT","NFT","AINFT"}
 
 def wait_api():
@@ -94,21 +95,24 @@ def calc(df):
     atr = tr.rolling(14).mean().iloc[-1]
     p = c.iloc[-1]
     six = [e20, e60, e120, m20, m60, m120]
-    return {"p": p, "atr": atr, "e200": e200, "spread": (max(six)-min(six))/p, 
-            "vr": df["v"].iloc[-1] / max(df["v"].iloc[-22:-2].mean(), 1e-12)}
+    return {"p": p, "atr": atr, "e20": e20, "e60": e60, "e120": e120, "e200": e200, 
+            "spread": (max(six)-min(six))/p, "vr": df["v"].iloc[-1] / max(df["v"].iloc[-22:-2].mean(), 1e-12)}
 
 def score(df, iv, direction, btc):
     x = calc(df)
     p, s, reasons = x["p"], 0, []
     if p <= 0 or x["atr"] <= 0: return None
-    if x["vr"] < 0.5: return None
+    if x["vr"] < 0.5: return None # 缩量一票否决
 
+    # 取消突破前高/前低，改为均线排列确认（提前埋伏）
     if direction == "LONG":
         if p > x["e200"]: s += 15; reasons.append("EMA200多头")
+        if x["e20"] > x["e60"] > x["e120"]: s += 15; reasons.append("均线多头排列")
         if btc: s += 10
         else: s -= 7
     else:
         if p < x["e200"]: s += 15; reasons.append("EMA200空头")
+        if x["e20"] < x["e60"] < x["e120"]: s += 15; reasons.append("均线空头排列")
         if not btc: s += 10
         else: s -= 7
 
@@ -119,10 +123,6 @@ def score(df, iv, direction, btc):
     if x["vr"] >= 1.8: s += 12; reasons.append("爆量")
     elif x["vr"] >= 1.35: s += 9; reasons.append("放量")
     elif x["vr"] >= .8: s += 5
-
-    ph, pl = df["h"].iloc[-21:-1].max(), df["l"].iloc[-21:-1].min()
-    if direction == "LONG" and p > ph: s += 15; reasons.append("突破前高")
-    elif direction == "SHORT" and p < pl: s += 15; reasons.append("跌破前低")
 
     row = df.iloc[-1]
     rng, body = row["h"] - row["l"], abs(row["c"] - row["o"])
@@ -217,7 +217,7 @@ def format_msg(x, btc):
 
 def main():
     if not WH: print("⛔ 缺少 FEISHU_WEBHOOK"); return
-    print("🚀 终极平衡完美版启动")
+    print("🚀 提前埋伏版启动")
     symbols = coins()
     if not symbols: print("⛔ 获取币种失败"); return
     print(f"✅ 监控 {len(symbols)} 个高流动性合约")
