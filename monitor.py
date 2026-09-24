@@ -105,7 +105,7 @@ def btc(bar):
         return 0
     e=ema(df.c,200).iloc[-1]
     p=df.c.iloc[-1]
-    s=6 if p>e else -6
+    s=15 if p>e else -15
     btc_cache[bar]=(time.time(),s)
     return s
 
@@ -156,89 +156,100 @@ def signal(df,tf,sym):
     vol=df.v.iloc[-1]
     vmean=df.v.iloc[-21:-1].mean()
     vr=vol/vmean if vmean>0 else 0
-    spread=abs(e20-e60)/p*100
     btc_s=btc(TF[tf]["bar"])
+    atr_avg=atr(df).iloc[-6:-1].mean()
+
+    def calc_score(direction):
+        sc=0
+
+        # VR 30 / 15
+        if vr>=2.0:
+            sc+=30
+        elif vr>=1.5:
+            sc+=15
+
+        # body/rng 25 / 12
+        if body/rng>=.7:
+            sc+=25
+        elif body/rng>=.55:
+            sc+=12
+
+        # ATR 20
+        if a>atr_avg*1.05:
+            sc+=20
+
+        # BTC 15
+        if direction=="LONG":
+            sc+=min(max(btc_s,0),15)
+        else:
+            sc+=min(max(-btc_s,0),15)
+
+        # EMA20 10
+        if direction=="LONG" and p>e20:
+            sc+=10
+        elif direction=="SHORT" and p<e20:
+            sc+=10
+
+        return round(sc)
 
     candidates=[]
 
+    # 趋势多
     if e20>e60>e120 and p>e200:
-        sc=28
-        sc+=10 if spread>=.25 else 5 if spread>=.15 else 0
-        sc+=10 if vr>=1.25 else 5 if vr>=1 else 0
-        sc+=8 if body/rng>=.55 else 3 if body/rng>=.4 else 0
-        sc+=min(max(btc_s,0),18)
-        sc+=8 if p>e20 else 0
-        f=funding(sym)
-        if f is not None:
-            sc-=5 if f>.08 else 3 if f>.05 else 0
-        if sc>=TF[tf]["score"]:
-            sl=p-2.5*a
-            tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
-            rr=(tp-p)/(p-sl) if p>sl else 0
-            if rr>=1.8:
+        sl=p-2.5*a
+        tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
+        rr=(tp-p)/(p-sl) if p>sl else 0
+        if rr>=1.8:
+            sc=calc_score("LONG")
+            if sc>=TF[tf]["score"]:
                 candidates.append({
                     "sym":sym,"tf":tf,"dir":"LONG",
-                    "type":"TREND","score":round(sc),
+                    "type":"TREND","score":sc,
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
+    # 趋势空
     if e20<e60<e120 and p<e200:
-        sc=28
-        sc+=10 if spread>=.25 else 5 if spread>=.15 else 0
-        sc+=10 if vr>=1.25 else 5 if vr>=1 else 0
-        sc+=8 if body/rng>=.55 else 3 if body/rng>=.4 else 0
-        sc+=min(max(-btc_s,0),18)
-        sc+=8 if p<e20 else 0
-        f=funding(sym)
-        if f is not None:
-            sc-=5 if f<-.08 else 3 if f<-.05 else 0
-        if sc>=TF[tf]["score"]:
-            sl=p+2.5*a
-            tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
-            rr=(p-tp)/(sl-p) if p<sl else 0
-            if rr>=1.8:
+        sl=p+2.5*a
+        tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
+        rr=(p-tp)/(sl-p) if p<sl else 0
+        if rr>=1.8:
+            sc=calc_score("SHORT")
+            if sc>=TF[tf]["score"]:
                 candidates.append({
                     "sym":sym,"tf":tf,"dir":"SHORT",
-                    "type":"TREND","score":round(sc),
+                    "type":"TREND","score":sc,
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
     hi=df.h.iloc[-21:-1].max()
     lo=df.l.iloc[-21:-1].min()
 
+    # 突破多
     if p>hi and body/rng>=.55 and vr>=1.5:
-        sc=35
-        sc+=12 if vr>=2 else 6
-        sc+=10 if body/rng>=.7 else 5
-        sc+=8 if a>atr(df).iloc[-6:-1].mean()*1.05 else 0
-        sc+=min(max(btc_s,0),18)
-        sc+=5 if p>e20 else 0
-        if sc>=TF[tf]["score"]:
-            sl=p-2.5*a
-            tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
-            rr=(tp-p)/(p-sl) if p>sl else 0
-            if rr>=1.8:
+        sl=p-2.5*a
+        tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
+        rr=(tp-p)/(p-sl) if p>sl else 0
+        if rr>=1.8:
+            sc=calc_score("LONG")
+            if sc>=TF[tf]["score"]:
                 candidates.append({
                     "sym":sym,"tf":tf,"dir":"LONG",
-                    "type":"BREAKOUT","score":round(sc),
+                    "type":"BREAKOUT","score":sc,
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
+    # 突破空
     if p<lo and body/rng>=.55 and vr>=1.5:
-        sc=35
-        sc+=12 if vr>=2 else 6
-        sc+=10 if body/rng>=.7 else 5
-        sc+=8 if a>atr(df).iloc[-6:-1].mean()*1.05 else 0
-        sc+=min(max(-btc_s,0),18)
-        sc+=5 if p<e20 else 0
-        if sc>=TF[tf]["score"]:
-            sl=p+2.5*a
-            tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
-            rr=(p-tp)/(sl-p) if p<sl else 0
-            if rr>=1.8:
+        sl=p+2.5*a
+        tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
+        rr=(p-tp)/(sl-p) if p<sl else 0
+        if rr>=1.8:
+            sc=calc_score("SHORT")
+            if sc>=TF[tf]["score"]:
                 candidates.append({
                     "sym":sym,"tf":tf,"dir":"SHORT",
-                    "type":"BREAKOUT","score":round(sc),
+                    "type":"BREAKOUT","score":sc,
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
