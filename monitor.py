@@ -1,253 +1,422 @@
-import os, time, random, datetime, requests, pandas as pd
+import os,time,json,random,requests,pandas as pd
+from datetime import datetime,timezone,timedelta
 
-WH = os.environ.get("FEISHU_WEBHOOK", "")
-IVS = ["15m", "30m", "1H", "4H", "1D"]
-MAX_COINS = 150
-API_GAP, FEISHU_GAP = 0.3, 1.5
-last_api, last_msg = 0, 0
-fund_cache, sent = {}, {}
+BASE="https://www.okx.com"
+WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
+API_GAP=.45
+FEISHU_GAP=2
+MAX429=3
+caches={}
+btc_cache={}
+breaker=False
+con429=0
 
-H = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-S = requests.Session(); S.headers.update(H)
+HDR={"User-Agent":"Mozilla/5.0","Accept":"application/json"}
 
-SLM, BEM = 2.5, 0.5
-# 去掉突破分后，评分门槛相应下调5分，保证正常频率
-MIN_SCORE = {"15m": 70, "30m": 70, "1H": 72, "4H": 74, "1D": 76}
-EXCLUDE = {"USDT","USDC","USD1","USDG","PYUSD","RLUSD","USDS","USDE","DAI","BUSD","FDUSD","TUSD","USDP","GUSD","FRAX","USDD","USAT","NFT","AINFT"}
+TF={
+    "15m":{"bar":"15m","limit":250,"score":68,"exp":12},
+    "30m":{"bar":"30m","limit":250,"score":68,"exp":18},
+    "1H":{"bar":"1H","limit":250,"score":70,"exp":48},
+    "4H":{"bar":"4H","limit":250,"score":72,"exp":120},
+    "1D":{"bar":"1D","limit":250,"score":74,"exp":336}
+}
 
-def wait_api():
-    global last_api
-    d = API_GAP - (time.time() - last_api)
-    if d > 0: time.sleep(d)
-    time.sleep(random.uniform(.05, .15))
-    last_api = time.time()
+def sleep_api():
+    time.sleep(API_GAP+random.uniform(.08,.25))
 
-def get(url, params=None, timeout=12, retry=2):
-    for n in range(retry + 1):
-        wait_api()
+def get(path,params=None,retry=3):
+    global breaker,con429
+    if breaker:
+        return None
+    for i in range(retry):
+        sleep_api()
         try:
-            r = S.get(url, params=params, timeout=timeout)
-            if r.status_code == 200: return r.json()
-            if r.status_code == 429: time.sleep(10 * (n + 1)); continue
-            if r.status_code in (403, 418): return None
-            if r.status_code >= 500: time.sleep(3 * (n + 1))
-        except requests.RequestException: time.sleep(2 * (n + 1))
+            r=requests.get(BASE+path,params=params,timeout=15,headers=HDR)
+            if r.status_code in (403,418):
+                breaker=True
+                return None
+            if r.status_code==429:
+                con429+=1
+                if con429>=MAX429:
+                    breaker=True
+                    return None
+                time.sleep(min(20*(2**i),60)+random.uniform(1,4))
+                continue
+            if r.status_code>=500:
+                time.sleep(3*(i+1))
+                continue
+            r.raise_for_status()
+            con429=0
+            return r.json()
+        except requests.RequestException:
+            if i<retry-1:
+                time.sleep(2*(i+1))
     return None
 
-def okx_symbols():
-    d = get("https://www.okx.com/api/v5/public/instruments", {"instType": "SWAP"}, 15)
-    if not d: return []
-    return list(dict.fromkeys(x["instId"].split("-")[0] for x in d.get("data", []) 
-        if x.get("instId","").endswith("-USDT-SWAP") and x.get("state") == "live" and x["instId"].split("-")[0] not in EXCLUDE))
+def candles(sym,bar,limit=250):
+    k=f"{sym}_{bar}"
+    now=time.time()
+    if k in caches and now-caches[k][0]<35:
+        return caches[k][1]
+    x=get("/api/v5/market/candles",{
+        "instId":sym,
+        "bar":bar,
+        "limit":str(limit)
+    })
+    if not x or x.get("code")!="0":
+        return None
+    rows=[]
+    for z in reversed(x["data"]):
+        rows.append([
+            int(z[0]),float(z[1]),float(z[2]),float(z[3]),
+            float(z[4]),float(z[5])
+        ])
+    df=pd.DataFrame(rows,columns=["ts","o","h","l","c","v"])
+    caches[k]=(now,df)
+    return df
 
-def coins():
-    ss = okx_symbols()
-    if not ss: return []
-    d = get("https://www.okx.com/api/v5/market/tickers", {"instType": "SWAP"}, 15)
-    if not d: return ss[:MAX_COINS]
-    a = []
-    for x in d.get("data", []):
-        ins = x.get("instId","")
-        if not ins.endswith("-USDT-SWAP"): continue
-        s = ins.split("-")[0]
-        if s in ss:
-            try: a.append((s, float(x.get("volCcy24h", 0))))
-            except: pass
-    a.sort(key=lambda x:x[1], reverse=True)
-    return [x[0] for x in a[:MAX_COINS]]
+def ema(s,n):
+    return s.ewm(span=n,adjust=False).mean()
 
-def ok_t(iv):
-    n = datetime.datetime.utcnow()
-    return (n.hour == 0 and n.minute < 30) if iv == "1D" else (n.hour % 4 == 0 and n.minute < 30) if iv == "4H" else (n.minute < 30) if iv == "1H" else (n.minute < 15 or 30 <= n.minute < 45) if iv == "30m" else True
+def atr(df,n=14):
+    pc=df.c.shift()
+    tr=pd.concat([
+        df.h-df.l,
+        (df.h-pc).abs(),
+        (df.l-pc).abs()
+    ],axis=1).max(axis=1)
+    return tr.rolling(n).mean()
 
-def candles(sym, iv):
-    d = get(f"https://www.okx.com/api/v5/market/candles", {"instId": f"{sym}-USDT-SWAP", "bar": iv, "limit": 230}, 12)
-    if not d or not d.get("data"): return None
-    try:
-        df = pd.DataFrame(d["data"], columns=["t","o","h","l","c","v","vc","vq","confirm"])
-        for c in ["o","h","l","c","v","t"]: df[c] = pd.to_numeric(df[c], errors="coerce")
-        df = df.dropna().sort_values("t").reset_index(drop=True)
-        if str(df["confirm"].iloc[-1]) != "1": df = df.iloc[:-1]
-        return df if len(df) >= 205 else None
-    except: return None
+def btc(bar):
+    if bar in btc_cache and time.time()-btc_cache[bar][0]<60:
+        return btc_cache[bar][1]
+    df=candles("BTC-USDT-SWAP",bar,250)
+    if df is None or len(df)<205:
+        btc_cache[bar]=(time.time(),0)
+        return 0
+    e=ema(df.c,200).iloc[-1]
+    p=df.c.iloc[-1]
+    s=6 if p>e else -6
+    btc_cache[bar]=(time.time(),s)
+    return s
 
 def funding(sym):
-    if sym in fund_cache: return fund_cache[sym]
-    d = get("https://www.okx.com/api/v5/public/funding-rate", {"instId": f"{sym}-USDT-SWAP"}, 8, 1)
-    try: x = float(d["data"][0]["fundingRate"])
-    except: x = 0
-    fund_cache[sym] = x
-    return x
+    x=get("/api/v5/public/funding-rate",{"instId":sym})
+    if not x or x.get("code")!="0" or not x.get("data"):
+        return None
+    try:
+        return float(x["data"][0]["fundingRate"])*100
+    except:
+        return None
 
-def btc_trend():
-    df = candles("BTC", "1H")
-    if df is None: return True
-    c = df["c"]
-    return c.iloc[-1] >= c.ewm(span=200, adjust=False).mean().iloc[-1]
+def coins(n=150):
+    a=get("/api/v5/public/instruments",{"instType":"SWAP"})
+    if not a or a.get("code")!="0":
+        return []
+    syms=[
+        x["instId"] for x in a["data"]
+        if x.get("settleCcy")=="USDT"
+        and x.get("state")=="live"
+        and x.get("ctType")=="linear"
+    ]
+    b=get("/api/v5/market/tickers",{"instType":"SWAP"})
+    if not b or b.get("code")!="0":
+        return syms[:n]
+    mp={
+        x["instId"]:float(x.get("volCcy24h","0") or 0)
+        for x in b["data"]
+    }
+    return sorted(syms,key=lambda x:mp.get(x,0),reverse=True)[:n]
 
-def calc(df):
-    c, h, l = df["c"], df["h"], df["l"]
-    e20, e60, e120 = [c.ewm(span=n, adjust=False).mean().iloc[-1] for n in (20, 60, 120)]
-    e200 = c.ewm(span=200, adjust=False).mean().iloc[-1]
-    m20, m60, m120 = [c.rolling(n).mean().iloc[-1] for n in (20, 60, 120)]
-    pc = c.shift(1)
-    tr = pd.concat([h-l, (h-pc).abs(), (l-pc).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(14).mean().iloc[-1]
-    p = c.iloc[-1]
-    six = [e20, e60, e120, m20, m60, m120]
-    return {"p": p, "atr": atr, "e20": e20, "e60": e60, "e120": e120, "e200": e200, 
-            "spread": (max(six)-min(six))/p, "vr": df["v"].iloc[-1] / max(df["v"].iloc[-22:-2].mean(), 1e-12)}
+def resonance(sym,tf,direction,signals):
+    adj={"15m":"30m","30m":"1H","1H":"4H","4H":"1D"}
+    rev={v:k for k,v in adj.items()}
+    tf_adj={adj.get(tf),rev.get(tf)}-{None}
+    has_adj=any(
+        x["sym"]==sym and x["tf"] in tf_adj and x["dir"]==direction
+        for x in signals
+    )
+    if has_adj:
+        return "相邻周期共振"
+    has_any=any(
+        x["sym"]==sym and x["dir"]==direction and x["tf"]!=tf
+        for x in signals
+    )
+    return "跨周期共振" if has_any else "无"
 
-def score(df, iv, direction, btc):
-    x = calc(df)
-    p, s, reasons = x["p"], 0, []
-    if p <= 0 or x["atr"] <= 0: return None
-    if x["vr"] < 0.5: return None # 缩量一票否决
+def signal(df,tf,sym):
+    if df is None or len(df)<210:
+        return None
 
-    # 取消突破前高/前低，改为均线排列确认（提前埋伏）
-    if direction == "LONG":
-        if p > x["e200"]: s += 15; reasons.append("EMA200多头")
-        if x["e20"] > x["e60"] > x["e120"]: s += 15; reasons.append("均线多头排列")
-        if btc: s += 10
-        else: s -= 7
-    else:
-        if p < x["e200"]: s += 15; reasons.append("EMA200空头")
-        if x["e20"] < x["e60"] < x["e120"]: s += 15; reasons.append("均线空头排列")
-        if not btc: s += 10
-        else: s -= 7
+    p=df.c.iloc[-1]
+    e20=ema(df.c,20).iloc[-1]
+    e60=ema(df.c,60).iloc[-1]
+    e120=ema(df.c,120).iloc[-1]
+    e200=ema(df.c,200).iloc[-1]
+    a=atr(df).iloc[-1]
 
-    lim = {"15m":.012, "30m":.014, "1H":.017, "4H":.025, "1D":.040}[iv]
-    if x["spread"] <= lim: s += 15; reasons.append("六线粘合")
-    elif x["spread"] <= lim*1.35: s += 8
+    if not a or a<=0:
+        return None
 
-    if x["vr"] >= 1.8: s += 12; reasons.append("爆量")
-    elif x["vr"] >= 1.35: s += 9; reasons.append("放量")
-    elif x["vr"] >= .8: s += 5
+    body=abs(df.c.iloc[-1]-df.o.iloc[-1])
+    rng=max(df.h.iloc[-1]-df.l.iloc[-1],a*.01)
+    vol=df.v.iloc[-1]
+    vmean=df.v.iloc[-21:-1].mean()
+    vr=vol/vmean if vmean>0 else 0
+    spread=abs(e20-e60)/p*100
+    btc_s=btc(TF[tf]["bar"])
 
-    row = df.iloc[-1]
-    rng, body = row["h"] - row["l"], abs(row["c"] - row["o"])
-    if rng > 0:
-        br = body/rng
-        if br >= .6: s += 5
-        elif br >= .4: s += 3
+    candidates=[]
 
-    atr_pct = x["atr"]/p
-    if .001 <= atr_pct <= .15: s += 5
-    else: s -= 5
+    if e20>e60>e120 and p>e200:
+        sc=28
+        sc+=10 if spread>=.25 else 5 if spread>=.15 else 0
+        sc+=10 if vr>=1.25 else 5 if vr>=1 else 0
+        sc+=8 if body/rng>=.55 else 3 if body/rng>=.4 else 0
+        sc+=min(max(btc_s,0),18)
+        sc+=8 if p>e20 else 0
+        f=funding(sym)
+        if f is not None:
+            sc-=5 if f>.08 else 3 if f>.05 else 0
+        if sc>=TF[tf]["score"]:
+            sl=p-2.5*a
+            tp=min(
+                df.h.iloc[-61:-1].max()*.995,
+                p+3*a
+            )
+            rr=(tp-p)/(p-sl) if p>sl else 0
+            if rr>=1.8:
+                candidates.append({
+                    "sym":sym,"tf":tf,"dir":"LONG",
+                    "type":"TREND","score":round(sc),
+                    "entry":p,"sl":sl,"tp":tp,"rr":rr
+                })
 
-    return max(0, min(100, int(s))), x, reasons
+    if e20<e60<e120 and p<e200:
+        sc=28
+        sc+=10 if spread>=.25 else 5 if spread>=.15 else 0
+        sc+=10 if vr>=1.25 else 5 if vr>=1 else 0
+        sc+=8 if body/rng>=.55 else 3 if body/rng>=.4 else 0
+        sc+=min(max(-btc_s,0),18)
+        sc+=8 if p<e20 else 0
+        f=funding(sym)
+        if f is not None:
+            sc-=5 if f<-.08 else 3 if f<-.05 else 0
+        if sc>=TF[tf]["score"]:
+            sl=p+2.5*a
+            tp=max(
+                df.l.iloc[-61:-1].min()*1.005,
+                p-3*a
+            )
+            rr=(p-tp)/(sl-p) if p<sl else 0
+            if rr>=1.8:
+                candidates.append({
+                    "sym":sym,"tf":tf,"dir":"SHORT",
+                    "type":"TREND","score":round(sc),
+                    "entry":p,"sl":sl,"tp":tp,"rr":rr
+                })
 
-def signal(sym, iv, btc):
-    df = candles(sym, iv)
-    if df is None: return None
-    a, b = score(df, iv, "LONG", btc), score(df, iv, "SHORT", btc)
-    if not a or not b: return None
-    direction, result = ("LONG", a) if a[0] >= b[0] else ("SHORT", b)
-    base_score, x, reasons = result
-    if base_score < MIN_SCORE[iv] - 8: return None
+    hi=df.h.iloc[-21:-1].max()
+    lo=df.l.iloc[-21:-1].min()
 
-    fr = funding(sym)
-    if direction == "LONG" and fr > .001: base_score -= 5
-    elif direction == "SHORT" and fr < -.001: base_score -= 5
-    if base_score < MIN_SCORE[iv]: return None
+    if p>hi and body/rng>=.55 and vr>=1.5:
+        sc=35
+        sc+=12 if vr>=2 else 6
+        sc+=10 if body/rng>=.7 else 5
+        sc+=8 if a>atr(df).iloc[-6:-1].mean()*1.05 else 0
+        sc+=min(max(btc_s,0),18)
+        sc+=5 if p>e20 else 0
+        if sc>=TF[tf]["score"]:
+            sl=p-2.5*a
+            tp=min(
+                df.h.iloc[-61:-1].max()*.995,
+                p+3*a
+            )
+            rr=(tp-p)/(p-sl) if p>sl else 0
+            if rr>=1.8:
+                candidates.append({
+                    "sym":sym,"tf":tf,"dir":"LONG",
+                    "type":"BREAKOUT","score":round(sc),
+                    "entry":p,"sl":sl,"tp":tp,"rr":rr
+                })
 
-    p, atr = x["p"], x["atr"]
-    hi, lo = df["h"].iloc[-60:].max(), df["l"].iloc[-60:].min()
-    
-    if direction == "LONG":
-        sl = p - SLM*atr
-        tp = hi * 0.995
-        be = p + BEM*atr
-        rr = (tp - p) / (p - sl) if p > sl else 0
-        itok = p > x["e200"]
-    else:
-        sl = p + SLM*atr
-        tp = lo * 1.005
-        be = p - BEM*atr
-        rr = (p - tp) / (sl - p) if sl > p else 0
-        itok = p < x["e200"]
+    if p<lo and body/rng>=.55 and vr>=1.5:
+        sc=35
+        sc+=12 if vr>=2 else 6
+        sc+=10 if body/rng>=.7 else 5
+        sc+=8 if a>atr(df).iloc[-6:-1].mean()*1.05 else 0
+        sc+=min(max(-btc_s,0),18)
+        sc+=5 if p<e20 else 0
+        if sc>=TF[tf]["score"]:
+            sl=p+2.5*a
+            tp=max(
+                df.l.iloc[-61:-1].min()*1.005,
+                p-3*a
+            )
+            rr=(p-tp)/(sl-p) if p<sl else 0
+            if rr>=1.8:
+                candidates.append({
+                    "sym":sym,"tf":tf,"dir":"SHORT",
+                    "type":"BREAKOUT","score":round(sc),
+                    "entry":p,"sl":sl,"tp":tp,"rr":rr
+                })
 
-    if itok:
-        if rr < 1.8: return None
-    else:
-        if rr < 2.5: return None
+    if not candidates:
+        return None
 
-    return {"sym":sym, "iv":iv, "direction":direction, "score":base_score,
-            "p":p, "sl":sl, "tp":tp, "rr":rr, "be":be, "fr":fr, "vr":x["vr"], "spread":x["spread"], "reasons":reasons, "itok":itok}
+    return max(candidates,key=lambda x:x["score"])
 
-def send(text):
-    global last_msg
-    if not WH: return False
-    gap = FEISHU_GAP-(time.time()-last_msg)
-    if gap > 0: time.sleep(gap)
-    for n in range(3):
+def load_json(path,default):
+    try:
+        with open(path,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return default
+
+def save_json(path,data):
+    tmp=path+".tmp"
+    with open(tmp,"w",encoding="utf-8") as f:
+        json.dump(data,f,ensure_ascii=False,indent=2)
+    os.replace(tmp,path)
+
+def send(msg):
+    if not WEBHOOK:
+        return False
+    time.sleep(FEISHU_GAP+random.uniform(.1,.5))
+    for i in range(3):
         try:
-            r = S.post(WH, json={"msg_type":"text","content":{"text":text}}, timeout=10)
-            last_msg = time.time()
-            if r.status_code == 200: return True
-            if r.status_code == 429: time.sleep(8*(n+1)); continue
-            return False
-        except: time.sleep(3*(n+1))
+            r=requests.post(
+                WEBHOOK,
+                json={"msg_type":"text","content":{"text":msg}},
+                timeout=12
+            )
+            if r.status_code==429:
+                time.sleep(min(5*(2**i),30))
+                continue
+            return r.ok
+        except requests.RequestException:
+            time.sleep(2*(i+1))
     return False
 
-def format_msg(x, btc):
-    vr = x["vr"]
-    vol = f"🔥 爆量 {vr:.2f}x" if vr >= 1.8 else f"📈 放量 {vr:.2f}x" if vr >= 1.35 else f"📊 成交量 {vr:.2f}x"
-    reason = "、".join(x["reasons"][:5]) or "综合条件"
-    dir_emoji = "🟢 做多" if x["direction"]=="LONG" else "🔴 做空"
-    dir_text = "做多" if x["direction"]=="LONG" else "做空"
-    trend_tag = "✅ 顺势" if x["itok"] else "⚠️ 逆势"
+def fmt(x):
+    return f"{x:.8g}"
 
+def signal_msg(s):
     return (
-        f"🚨 {x['iv']} 周期信号\n{x['sym']} (OKX)\n\n"
-        f"{dir_emoji}｜{trend_tag}\n"
-        f"🎯 综合评分：{x['score']}/100\n"
-        f"💰 当前价：${x['p']:.6f}\n"
-        f"{vol}\n"
-        f"📐 均线差：{x['spread']:.2%}\n"
-        f"🔎 条件：{reason}\n"
-        f"₿ BTC：{'偏多' if btc else '偏空'}\n"
-        f"💵 资金费率：{x['fr']*100:.4f}%\n\n"
-        f"📈 {dir_text}计划:\n"
-        f"🛑 止损：${x['sl']:.6f}\n"
-        f"🎯 止盈(保守)：${x['tp']:.6f}\n"
-        f"📊 RR：{x['rr']:.2f}\n"
-        f"🛡️ 保本：${x['be']:.6f}"
+        "OKX信号\n"
+        f"币种：{s['sym']}\n"
+        f"周期：{s['tf']}\n"
+        f"类型：{s['type']}\n"
+        f"方向：{s['dir']}\n"
+        f"评分：{s['score']}\n"
+        f"入场：{fmt(s['entry'])}\n"
+        f"止损：{fmt(s['sl'])}\n"
+        f"止盈：{fmt(s['tp'])}\n"
+        f"RR：{s['rr']:.2f}\n"
+        f"共振：{s.get('res','无')}\n"
+        f"UTC：{s['time']}"
     )
 
+def key(s):
+    return f"{s['sym']}|{s['tf']}|{s['dir']}|{s['type']}|{s['ts']}"
+
+def evaluate(s):
+    exp=TF[s["tf"]]["exp"]
+    df=candles(s["sym"],TF[s["tf"]]["bar"],300)
+    if df is None:
+        return None
+
+    start=s["ts"]
+    future=df[df.ts>start]
+    if future.empty:
+        return None
+
+    maxbars=max(1,int(exp*60/{"15m":15,"30m":30,"1H":60,"4H":240,"1D":1440}[s["tf"]]))
+
+    future=future.iloc[:maxbars]
+
+    for _,r in future.iterrows():
+        if s["dir"]=="LONG":
+            hit_sl=r.l<=s["sl"]
+            hit_tp=r.h>=s["tp"]
+        else:
+            hit_sl=r.h>=s["sl"]
+            hit_tp=r.l<=s["tp"]
+
+        if hit_sl and hit_tp:
+            return "LOSS"
+        if hit_tp:
+            return "WIN"
+        if hit_sl:
+            return "LOSS"
+
+    if len(future)>=maxbars:
+        return "EXPIRED"
+    return None
+
 def main():
-    if not WH: print("⛔ 缺少 FEISHU_WEBHOOK"); return
-    print("🚀 提前埋伏版启动")
-    symbols = coins()
-    if not symbols: print("⛔ 获取币种失败"); return
-    print(f"✅ 监控 {len(symbols)} 个高流动性合约")
-    btc = btc_trend()
-    print("₿ BTC：", "偏多" if btc else "偏空")
+    global breaker
 
-    now_ts = time.time()
-    for iv in IVS:
-        if not ok_t(iv): continue
-        print(f"\n========== {iv} ==========")
-        results = []
-        for sym in symbols:
-            try:
-                x = signal(sym, iv, btc)
-                if not x: continue
-                key = (x["sym"], x["iv"], x["direction"])
-                if key in sent and now_ts - sent[key] < 1800:
-                    continue
-                sent[key] = now_ts
-                results.append(x)
-                if iv == "15m":
-                    if send(format_msg(x, btc)): print(f"📨 发送 {sym} {x['direction']} {x['score']}")
-            except Exception as e: print(f"⚠️ {sym}: {e}")
+    signals=[]
+    sent=load_json("sent_cache.json",{})
+    records=load_json("signals_record.json",[])
 
-        if iv != "15m" and results:
-            results.sort(key=lambda x:x["score"], reverse=True)
-            for x in results[:10]:
-                if send(format_msg(x, btc)): print(f"📨 发送 {x['sym']} {x['direction']} {x['score']}")
-        print(f"✅ {iv}完成：{len(results)} 个信号")
-    print("🏁 全部周期检查完成")
+    now=datetime.now(timezone.utc)
+    cutoff=(now-timedelta(hours=48)).timestamp()
+    sent={k:v for k,v in sent.items() if v>cutoff}
 
-if __name__ == "__main__":
+    syms=coins(150)
+
+    for sym in syms:
+        if breaker:
+            break
+
+        for tf in TF:
+            if breaker:
+                break
+
+            df=candles(sym,TF[tf]["bar"],TF[tf]["limit"])
+            s=signal(df,tf,sym)
+
+            if s:
+                s["ts"]=int(df.ts.iloc[-1])
+                s["time"]=datetime.fromtimestamp(
+                    s["ts"]/1000,timezone.utc
+                ).strftime("%Y-%m-%d %H:%M")
+                signals.append(s)
+
+    for s in signals:
+        s["res"]=resonance(
+            s["sym"],s["tf"],s["dir"],signals
+        )
+
+    record_ids={x.get("id") for x in records}
+
+    for s in signals:
+        sid=key(s)
+
+        if sid not in record_ids:
+            records.append({
+                "id":sid,
+                **s,
+                "result":None,
+                "created":int(time.time())
+            })
+            record_ids.add(sid)
+
+        if sid not in sent:
+            if send(signal_msg(s)):
+                sent[sid]=int(time.time())
+
+    for r in records:
+        if not r.get("result"):
+            result=evaluate(r)
+            if result:
+                r["result"]=result
+                r["result_time"]=int(time.time())
+
+    save_json("sent_cache.json",sent)
+    save_json("signals_record.json",records)
+
+if __name__=="__main__":
     main()
