@@ -15,7 +15,6 @@ HDR={"User-Agent":"Mozilla/5.0","Accept":"application/json"}
 
 TF={
     "15m":{"bar":"15m","limit":250,"score":68,"exp":12},
-    "30m":{"bar":"30m","limit":250,"score":68,"exp":18},
     "1H":{"bar":"1H","limit":250,"score":70,"exp":48},
     "4H":{"bar":"4H","limit":250,"score":72,"exp":120},
     "1D":{"bar":"1D","limit":250,"score":74,"exp":336}
@@ -24,13 +23,11 @@ TF={
 def ok_t(tf):
     n=datetime.now(timezone.utc)
     if tf=="1D":
-        return n.hour==0 and n.minute<30
+        return n.hour==0 and 30<=n.minute<45
     if tf=="4H":
-        return n.hour%4==0 and n.minute<30
+        return n.hour%4==0 and 15<=n.minute<30
     if tf=="1H":
-        return n.minute<30
-    if tf=="30m":
-        return n.minute<15 or 30<=n.minute<45
+        return n.minute<15
     return True
 
 def sleep_api():
@@ -314,7 +311,7 @@ def evaluate(s):
     if future.empty:
         return None
 
-    maxbars=max(1,int(exp*60/{"15m":15,"30m":30,"1H":60,"4H":240,"1D":1440}[s["tf"]]))
+    maxbars=max(1,int(exp*60/{"15m":15,"1H":60,"4H":240,"1D":1440}[s["tf"]]))
     future=future.iloc[:maxbars]
 
     for _,r in future.iterrows():
