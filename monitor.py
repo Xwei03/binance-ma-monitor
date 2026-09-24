@@ -161,40 +161,28 @@ def signal(df,tf,sym):
 
     def calc_score(direction):
         sc=0
-
-        # VR 30 / 15
         if vr>=2.0:
             sc+=30
         elif vr>=1.5:
             sc+=15
-
-        # body/rng 25 / 12
         if body/rng>=.7:
             sc+=25
         elif body/rng>=.55:
             sc+=12
-
-        # ATR 20
         if a>atr_avg*1.05:
             sc+=20
-
-        # BTC 15
         if direction=="LONG":
             sc+=min(max(btc_s,0),15)
         else:
             sc+=min(max(-btc_s,0),15)
-
-        # EMA20 10
         if direction=="LONG" and p>e20:
             sc+=10
         elif direction=="SHORT" and p<e20:
             sc+=10
-
         return round(sc)
 
     candidates=[]
 
-    # 趋势多
     if e20>e60>e120 and p>e200:
         sl=p-2.5*a
         tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
@@ -208,7 +196,6 @@ def signal(df,tf,sym):
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
-    # 趋势空
     if e20<e60<e120 and p<e200:
         sl=p+2.5*a
         tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
@@ -225,7 +212,6 @@ def signal(df,tf,sym):
     hi=df.h.iloc[-21:-1].max()
     lo=df.l.iloc[-21:-1].min()
 
-    # 突破多
     if p>hi and body/rng>=.55 and vr>=1.5:
         sl=p-2.5*a
         tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
@@ -239,7 +225,6 @@ def signal(df,tf,sym):
                     "entry":p,"sl":sl,"tp":tp,"rr":rr
                 })
 
-    # 突破空
     if p<lo and body/rng>=.55 and vr>=1.5:
         sl=p+2.5*a
         tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
@@ -271,17 +256,13 @@ def save_json(path,data):
         json.dump(data,f,ensure_ascii=False,indent=2)
     os.replace(tmp,path)
 
-def send(msg):
+def send(payload):
     if not WEBHOOK:
         return False
     time.sleep(FEISHU_GAP+random.uniform(.1,.5))
     for i in range(3):
         try:
-            r=requests.post(
-                WEBHOOK,
-                json={"msg_type":"text","content":{"text":msg}},
-                timeout=12
-            )
+            r=requests.post(WEBHOOK,json=payload,timeout=12)
             if r.status_code==429:
                 time.sleep(min(5*(2**i),30))
                 continue
@@ -297,19 +278,31 @@ def signal_msg(s):
     tf_map={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
     type_map={"TREND":"趋势","BREAKOUT":"突破"}
     dir_map={"LONG":"做多","SHORT":"做空"}
-    return (
-        "OKX信号\n"
-        f"币种：{s['sym']}\n"
-        f"周期：{tf_map.get(s['tf'],s['tf'])}\n"
-        f"类型：{type_map.get(s['type'],s['type'])}\n"
-        f"方向：{dir_map.get(s['dir'],s['dir'])}\n"
-        f"评分：{s['score']}\n"
-        f"入场：{fmt(s['entry'])}\n"
-        f"止损：{fmt(s['sl'])}\n"
-        f"止盈：{fmt(s['tp'])}\n"
-        f"盈亏比：{s['rr']:.2f}\n"
-        f"时间：{s['time']}"
+
+    content=(
+        f"**币种**：{s['sym']}\n"
+        f"**周期**：{tf_map.get(s['tf'],s['tf'])}\n"
+        f"**类型**：{type_map.get(s['type'],s['type'])}\n"
+        f"**方向**：{dir_map.get(s['dir'],s['dir'])}\n"
+        f"**评分**：{s['score']}\n"
+        f"**入场**：{fmt(s['entry'])}\n"
+        f"**止损**：{fmt(s['sl'])}\n"
+        f"**止盈**：{fmt(s['tp'])}\n"
+        f"**盈亏比**：{s['rr']:.2f}\n"
+        f"**时间**：{s['time']}"
     )
+
+    return {
+        "msg_type":"interactive",
+        "card":{
+            "header":{
+                "title":{"tag":"lark_md","content":"**宝宝巴士🚌快上车**"}
+            },
+            "elements":[
+                {"tag":"div","text":{"tag":"lark_md","content":content}}
+            ]
+        }
+    }
 
 def key(s):
     return f"{s['sym']}|{s['tf']}|{s['dir']}|{s['type']}|{s['ts']}"
