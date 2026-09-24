@@ -21,6 +21,18 @@ TF={
     "1D":{"bar":"1D","limit":250,"score":74,"exp":336}
 }
 
+def ok_t(tf):
+    n=datetime.now(timezone.utc)
+    if tf=="1D":
+        return n.hour==0 and n.minute<30
+    if tf=="4H":
+        return n.hour%4==0 and n.minute<30
+    if tf=="1H":
+        return n.minute<30
+    if tf=="30m":
+        return n.minute<15 or 30<=n.minute<45
+    return True
+
 def sleep_api():
     time.sleep(API_GAP+random.uniform(.08,.25))
 
@@ -128,19 +140,21 @@ def coins(n=150):
     }
     return sorted(syms,key=lambda x:mp.get(x,0),reverse=True)[:n]
 
-def resonance(sym,tf,direction,signals):
+def resonance(sym,tf,direction,records):
+    if tf=="15m":
+        return "无"
     adj={"15m":"30m","30m":"1H","1H":"4H","4H":"1D"}
     rev={v:k for k,v in adj.items()}
     tf_adj={adj.get(tf),rev.get(tf)}-{None}
     has_adj=any(
-        x["sym"]==sym and x["tf"] in tf_adj and x["dir"]==direction
-        for x in signals
+        r.get("sym")==sym and r.get("tf") in tf_adj and r.get("dir")==direction
+        for r in records
     )
     if has_adj:
         return "相邻周期共振"
     has_any=any(
-        x["sym"]==sym and x["dir"]==direction and x["tf"]!=tf
-        for x in signals
+        r.get("sym")==sym and r.get("dir")==direction and r.get("tf")!=tf
+        for r in records
     )
     return "跨周期共振" if has_any else "无"
 
@@ -180,10 +194,7 @@ def signal(df,tf,sym):
             sc-=5 if f>.08 else 3 if f>.05 else 0
         if sc>=TF[tf]["score"]:
             sl=p-2.5*a
-            tp=min(
-                df.h.iloc[-61:-1].max()*.995,
-                p+3*a
-            )
+            tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
             rr=(tp-p)/(p-sl) if p>sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -204,22 +215,19 @@ def signal(df,tf,sym):
             sc-=5 if f<-.08 else 3 if f<-.05 else 0
         if sc>=TF[tf]["score"]:
             sl=p+2.5*a
-            tp=max(
-                df.l.iloc[-61:-1].min()*1.005,
-                p-3*a
-            )
+            tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
             rr=(p-tp)/(sl-p) if p<sl else 0
             if rr>=1.8:
                 candidates.append({
                     "sym":sym,"tf":tf,"dir":"SHORT",
                     "type":"TREND","score":round(sc),
-                    "entry":p,"sl":sl,"tp":tp,"rr":rr
+                    "entry":p,"sl":sl,"           tp":tp,"rr": hitrr
                 })
 
-    hi=df.h.iloc[-21:-1].max()
-    lo=df.l.iloc[-21:-1].min()
+    hi=df_s.h.iloc[-21:-1].lmax()
+    lo=df.l.iloc[-21=r:-1].min()
 
-    if p>hi and body/rng>=.55 and vr>=1.5:
+    if p>.hhi and body/rng>=.55 and vr>=1.5:
         sc=35
         sc+=12 if vr>=2 else 6
         sc+=10 if body/rng>=.7 else 5
@@ -228,10 +236,7 @@ def signal(df,tf,sym):
         sc+=5 if p>e20 else 0
         if sc>=TF[tf]["score"]:
             sl=p-2.5*a
-            tp=min(
-                df.h.iloc[-61:-1].max()*.995,
-                p+3*a
-            )
+            tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a)
             rr=(tp-p)/(p-sl) if p>sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -249,10 +254,7 @@ def signal(df,tf,sym):
         sc+=5 if p<e20 else 0
         if sc>=TF[tf]["score"]:
             sl=p+2.5*a
-            tp=max(
-                df.l.iloc[-61:-1].min()*1.005,
-                p-3*a
-            )
+            tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a)
             rr=(p-tp)/(sl-p) if p<sl else 0
             if rr>=1.8:
                 candidates.append({
@@ -332,7 +334,6 @@ def evaluate(s):
         return None
 
     maxbars=max(1,int(exp*60/{"15m":15,"30m":30,"1H":60,"4H":240,"1D":1440}[s["tf"]]))
-
     future=future.iloc[:maxbars]
 
     for _,r in future.iterrows():
@@ -340,7 +341,7 @@ def evaluate(s):
             hit_sl=r.l<=s["sl"]
             hit_tp=r.h>=s["tp"]
         else:
-            hit_sl=r.h>=s["sl"]
+>=s["sl"]
             hit_tp=r.l<=s["tp"]
 
         if hit_sl and hit_tp:
@@ -357,7 +358,6 @@ def evaluate(s):
 def main():
     global breaker
 
-    signals=[]
     sent=load_json("sent_cache.json",{})
     records=load_json("signals_record.json",[])
 
@@ -367,11 +367,19 @@ def main():
 
     syms=coins(150)
 
-    for sym in syms:
+    round_signals=[]
+
+    for tf in TF:
         if breaker:
             break
 
-        for tf in TF:
+        if not ok_t(tf):
+            continue
+
+        print(f"扫描周期 {tf}...")
+        period_signals=[]
+
+        for sym in syms:
             if breaker:
                 break
 
@@ -383,30 +391,31 @@ def main():
                 s["time"]=datetime.fromtimestamp(
                     s["ts"]/1000,timezone.utc
                 ).strftime("%Y-%m-%d %H:%M")
-                signals.append(s)
+                pool=round_signals+records
+                s["res"]=resonance(s["sym"],s["tf"],s["dir"],pool)
+                period_signals.append(s)
 
-    for s in signals:
-        s["res"]=resonance(
-            s["sym"],s["tf"],s["dir"],signals
-        )
+        record_ids={x.get("id") for x in records}
+        for s in period_signals:
+            sid=key(s)
 
-    record_ids={x.get("id") for x in records}
+            if sid not in record_ids:
+                records.append({
+                    "id":sid,
+                    **s,
+                    "result":None,
+                    "created":int(time.time())
+                })
+                record_ids.add(sid)
 
-    for s in signals:
-        sid=key(s)
+            if sid not in sent:
+                if send(signal_msg(s)):
+                    sent[sid]=int(time.time())
 
-        if sid not in record_ids:
-            records.append({
-                "id":sid,
-                **s,
-                "result":None,
-                "created":int(time.time())
-            })
-            record_ids.add(sid)
+        round_signals.extend(period_signals)
 
-        if sid not in sent:
-            if send(signal_msg(s)):
-                sent[sid]=int(time.time())
+        save_json("sent_cache.json",sent)
+        save_json("signals_record.json",records)
 
     for r in records:
         if not r.get("result"):
