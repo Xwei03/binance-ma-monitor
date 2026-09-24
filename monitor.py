@@ -1,242 +1,250 @@
-import os,time,json,random,requests,pandas as pd,threading,websocket
+import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
-BASES=["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com","https://fapi4.binance.com"]
-WS="wss://fstream.binance.com/market"
+BASE="https://fapi.binance.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
-API_GAP=.45;FEISHU_GAP=2;MAX429=3
-caches,btc_cache,ws_data={},{},{}
-ws_symbols=[];ws_conn=None;ws_thread=rank_thread=None
-ws_lock=threading.Lock();breaker=ws_stop=False;con429=0
+GAP=.35
+TF={
+"15m":("15m",250,68,12),
+"1H":("1h",250,70,48),
+"4H":("4h",250,72,120),
+"1D":("1d",250,74,336)
+}
+CN={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
+DIR={"LONG":"做多","SHORT":"做空"}
+TYP={"TREND":"趋势","BREAKOUT":"突破"}
 
-TF={"15m":{"bar":"15m","limit":250,"score":68,"exp":12},"1H":{"bar":"1h","limit":250,"score":70,"exp":48},"4H":{"bar":"4h","limit":250,"score":72,"exp":120},"1D":{"bar":"1d","limit":250,"score":74,"exp":336}}
-NAMES={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
-TYPES={"TREND":"趋势","BREAKOUT":"突破"};DIRS={"LONG":"做多","SHORT":"做空"}
+cache={}
+blocked=False
+err429=0
 
-def ok_t(tf):
-    n=datetime.now(timezone.utc)
-    return (tf=="1D" and n.hour==0 and 30<=n.minute<45) or (tf=="4H" and n.hour%4==0 and 15<=n.minute<30) or (tf=="1H" and n.minute<15) or tf=="15m"
-
-def get(path,p=None,retry=3):
-    global breaker,con429
-    if breaker:return
-    for base in BASES:
-        for i in range(retry):
-            time.sleep(API_GAP+random.uniform(.08,.25))
+def get(path,p=None):
+    global blocked,err429
+    if blocked:return
+    for i in range(4):
+        time.sleep(GAP+random.random()*.15)
+        try:
+            r=requests.get(BASE+path,params=p,timeout=15)
+            if r.status_code==451:
+                print("[API] HTTP 451：当前运行环境无法访问 Binance Futures")
+                blocked=True
+                return
+            if r.status_code in (403,418):
+                print(f"[API] HTTP {r.status_code}")
+                blocked=True
+                return
+            if r.status_code==429:
+                err429+=1
+                print(f"[API] HTTP 429 #{err429}")
+                time.sleep(min(5*2**i,40)+random.random()*2)
+                if err429>=3:
+                    blocked=True
+                    return
+                continue
+            if r.status_code>=500:
+                time.sleep(2+i)
+                continue
+            r.raise_for_status()
             try:
-                r=requests.get(base+path,params=p,timeout=15,headers={"User-Agent":"Mozilla/5.0"})
-                if r.status_code in (403,418):
-                    print(f"[API] {base} HTTP {r.status_code}");breaker=True;return
-                if r.status_code==451:
-                    print(f"[API] {base} HTTP 451");break
-                if r.status_code==429:
-                    con429+=1;print(f"[API] {base} HTTP 429 #{con429}")
-                    if con429>=MAX429:breaker=True;return
-                    time.sleep(min(20*2**i,60)+random.uniform(1,4));continue
-                if r.status_code>=500:
-                    time.sleep(3*(i+1));continue
-                r.raise_for_status();con429=0;return r.json()
-            except requests.RequestException as e:
-                print(f"[API] {base} {type(e).__name__}: {e}")
-                if i<retry-1:time.sleep(2*(i+1))
-    print(f"[API] 全部失败: {path}")
+                x=r.json()
+            except ValueError:
+                print(f"[API] 非JSON响应 HTTP {r.status_code}")
+                continue
+            err429=0
+            return x
+        except requests.RequestException as e:
+            print("[API]",type(e).__name__)
+            time.sleep(2+i)
+    return
 
 def coins(n=150):
     a=get("/fapi/v1/exchangeInfo")
-    if not a:return []
-    s=[x["symbol"] for x in a.get("symbols",[]) if x.get("quoteAsset")=="USDT" and x.get("status")=="TRADING" and x.get("contractType")=="PERPETUAL"]
     b=get("/fapi/v1/ticker/24hr")
-    if not b:return s[:n]
+    if not a or not b:return []
+    ok={x["symbol"] for x in a["symbols"]
+        if x.get("quoteAsset")=="USDT"
+        and x.get("status")=="TRADING"
+        and x.get("contractType")=="PERPETUAL"}
     v={x["symbol"]:float(x.get("quoteVolume",0) or 0) for x in b}
-    return sorted(s,key=lambda x:v.get(x,0),reverse=True)[:n]
-
-def streams(s):return [f"{x.lower()}@kline_{v['bar']}" for x in s for v in TF.values()]
-
-def ws_msg(_,msg):
-    try:
-        d=json.loads(msg).get("data",{});k=d.get("k",{})
-        if d.get("e")!="kline" or not k:return
-        key=f"{d['s']}_{k['i']}";a=ws_data.setdefault(key,[])
-        row=[int(k["t"]),float(k["o"]),float(k["h"]),float(k["l"]),float(k["c"]),float(k["v"])]
-        if a and a[-1][0]==row[0]:a[-1]=row
-        else:a.append(row)
-        if len(a)>320:del a[:-320]
-    except:pass
-
-def ws_send(w,m,a,start):
-    for i in range(0,len(a),200):
-        try:w.send(json.dumps({"method":m,"params":a[i:i+200],"id":start+i//200}));time.sleep(.5)
-        except:break
-
-def ws_open(w):
-    global ws_conn
-    with ws_lock:ws_conn=w;s=list(ws_symbols)
-    ws_send(w,"SUBSCRIBE",streams(s),1);print(f"[WS] {len(s)}币/{len(streams(s))}流")
-
-def ws_close(*_):
-    global ws_conn
-    with ws_lock:ws_conn=None
-
-def ws_loop():
-    d=3
-    while not ws_stop:
-        try:
-            websocket.WebSocketApp(WS,on_open=ws_open,on_message=ws_msg,on_close=ws_close).run_forever(ping_interval=None,ping_timeout=None)
-        except:pass
-        if not ws_stop:time.sleep(d+random.uniform(.5,2));d=min(d*2,60)
-
-def update_symbols(ns):
-    global ws_symbols
-    ns=list(dict.fromkeys(ns))
-    if not ns:return
-    with ws_lock:old=set(ws_symbols);new=set(ns);w=ws_conn;ws_symbols=ns
-    add,rem=new-old,old-new
-    for s in rem:
-        for v in TF.values():
-            ws_data.pop(f"{s}_{v['bar']}",None);caches.pop(f"{s}_{v['bar']}",None)
-    if w:
-        if rem:ws_send(w,"UNSUBSCRIBE",streams(rem),1000)
-        if add:ws_send(w,"SUBSCRIBE",streams(add),2000)
-    print(f"[排名] +{len(add)} -{len(rem)} 当前{len(ns)}")
-
-def rank_loop():
-    while not ws_stop and not breaker:
-        time.sleep(3600)
-        if ws_stop or breaker:break
-        try:
-            s=coins(150)
-            if s:update_symbols(s)
-        except:pass
-
-def start_ws(s):
-    global ws_symbols,ws_thread,rank_thread
-    with ws_lock:ws_symbols=list(s)
-    if not ws_thread or not ws_thread.is_alive():
-        ws_thread=threading.Thread(target=ws_loop,daemon=True);ws_thread.start()
-    if not rank_thread or not rank_thread.is_alive():
-        rank_thread=threading.Thread(target=rank_loop,daemon=True);rank_thread.start()
-
-def current_symbols():
-    with ws_lock:return list(ws_symbols)
+    return sorted(ok,key=lambda x:v.get(x,0),reverse=True)[:n]
 
 def candles(sym,bar,limit=250):
-    k=f"{sym}_{bar}";now=time.time();a=ws_data.get(k)
-    if a and len(a)>=limit:
-        df=pd.DataFrame(a[-limit:],columns=["ts","o","h","l","c","v"]);caches[k]=(now,df);return df
-    if k in caches and now-caches[k][0]<35:return caches[k][1]
+    k=f"{sym}_{bar}"
+    if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
     x=get("/fapi/v1/klines",{"symbol":sym,"interval":bar,"limit":limit})
-    if not x:return caches[k][1] if k in caches else None
-    rows=[[int(z[0]),float(z[1]),float(z[2]),float(z[3]),float(z[4]),float(z[5])] for z in x]
-    df=pd.DataFrame(rows,columns=["ts","o","h","l","c","v"]);caches[k]=(now,df);ws_data[k]=rows[-320:];return df
+    if not x:return
+    d=pd.DataFrame(
+        [[int(a[0]),float(a[1]),float(a[2]),float(a[3]),float(a[4]),float(a[5])] for a in x],
+        columns=["ts","o","h","l","c","v"])
+    cache[k]=(time.time(),d)
+    return d
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
-def atr(df,n=14):
-    p=df.c.shift()
-    return pd.concat([df.h-df.l,(df.h-p).abs(),(df.l-p).abs()],axis=1).max(axis=1).rolling(n).mean()
+def atr(d,n=14):
+    p=d.c.shift()
+    return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(n).mean()
 
 def btc(bar):
-    if bar in btc_cache and time.time()-btc_cache[bar][0]<60:return btc_cache[bar][1]
-    df=candles("BTCUSDT",bar,250)
-    if df is None or len(df)<205:btc_cache[bar]=(time.time(),0);return 0
-    s=15 if df.c.iloc[-1]>ema(df.c,200).iloc[-1] else -15;btc_cache[bar]=(time.time(),s);return s
+    d=candles("BTCUSDT",bar,220)
+    if d is None:return 0
+    return 15 if d.c.iloc[-1]>ema(d.c,200).iloc[-1] else -15
 
-def signal(df,tf,sym):
-    if df is None or len(df)<210:return
-    p=df.c.iloc[-1];e20,e60,e120,e200=[ema(df.c,n).iloc[-1] for n in (20,60,120,200)];a=atr(df).iloc[-1]
-    if not a:return
-    body=abs(df.c.iloc[-1]-df.o.iloc[-1]);rng=max(df.h.iloc[-1]-df.l.iloc[-1],a*.01);vr=df.v.iloc[-1]/df.v.iloc[-21:-1].mean();bs=btc(TF[tf]["bar"]);aa=atr(df).iloc[-6:-1].mean()
-    def score(d):
+def signal(d,tf,sym):
+    if d is None or len(d)<210:return
+    p=d.c.iloc[-1]
+    e20,e60,e120,e200=[ema(d.c,n).iloc[-1] for n in (20,60,120,200)]
+    a=atr(d).iloc[-1]
+    if pd.isna(a):return
+    body=abs(d.c.iloc[-1]-d.o.iloc[-1])
+    rng=max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
+    vr=d.v.iloc[-1]/d.v.iloc[-21:-1].mean()
+    bs=btc(TF[tf][0])
+    aa=atr(d).iloc[-6:-1].mean()
+
+    def sc(x):
         s=30 if vr>=2 else 15 if vr>=1.5 else 0
         s+=25 if body/rng>=.7 else 12 if body/rng>=.55 else 0
         s+=20 if a>aa*1.05 else 0
-        s+=min(max(bs if d=="LONG" else -bs,0),15)
-        s+=10 if (d=="LONG" and p>e20) or (d=="SHORT" and p<e20) else 0
+        s+=min(max(bs if x=="LONG" else -bs,0),15)
+        s+=10 if (x=="LONG" and p>e20) or (x=="SHORT" and p<e20) else 0
         return s
-    c=[]
+
+    out=[]
     if e20>e60>e120 and p>e200:
-        sl=p-2.5*a;tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a);rr=(tp-p)/(p-sl);s=score("LONG")
-        if rr>=1.8 and s>=TF[tf]["score"]:c.append(("LONG","TREND",s,sl,tp,rr))
+        sl=p-2.5*a
+        tp=min(d.h.iloc[-61:-1].max()*.995,p+3*a)
+        rr=(tp-p)/(p-sl);s=sc("LONG")
+        if rr>=1.8 and s>=TF[tf][2]:out.append(("LONG","TREND",s,sl,tp,rr))
+
     if e20<e60<e120 and p<e200:
-        sl=p+2.5*a;tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a);rr=(p-tp)/(sl-p);s=score("SHORT")
-        if rr>=1.8 and s>=TF[tf]["score"]:c.append(("SHORT","TREND",s,sl,tp,rr))
-    hi,lo=df.h.iloc[-21:-1].max(),df.l.iloc[-21:-1].min()
+        sl=p+2.5*a
+        tp=max(d.l.iloc[-61:-1].min()*1.005,p-3*a)
+        rr=(p-tp)/(sl-p);s=sc("SHORT")
+        if rr>=1.8 and s>=TF[tf][2]:out.append(("SHORT","TREND",s,sl,tp,rr))
+
+    hi,lo=d.h.iloc[-21:-1].max(),d.l.iloc[-21:-1].min()
+
     if p>hi and body/rng>=.55 and vr>=1.5:
-        sl=p-2.5*a;tp=min(df.h.iloc[-61:-1].max()*.995,p+3*a);rr=(tp-p)/(p-sl);s=score("LONG")
-        if rr>=1.8 and s>=TF[tf]["score"]:c.append(("LONG","BREAKOUT",s,sl,tp,rr))
+        sl=p-2.5*a;tp=min(d.h.iloc[-61:-1].max()*.995,p+3*a)
+        rr=(tp-p)/(p-sl);s=sc("LONG")
+        if rr>=1.8 and s>=TF[tf][2]:out.append(("LONG","BREAKOUT",s,sl,tp,rr))
+
     if p<lo and body/rng>=.55 and vr>=1.5:
-        sl=p+2.5*a;tp=max(df.l.iloc[-61:-1].min()*1.005,p-3*a);rr=(p-tp)/(sl-p);s=score("SHORT")
-        if rr>=1.8 and s>=TF[tf]["score"]:c.append(("SHORT","BREAKOUT",s,sl,tp,rr))
-    if not c:return
-    d,t,s,sl,tp,rr=max(c,key=lambda x:x[2])
-    return {"sym":sym,"tf":tf,"dir":d,"type":t,"score":s,"entry":p,"sl":sl,"tp":tp,"rr":rr}
+        sl=p+2.5*a;tp=max(d.l.iloc[-61:-1].min()*1.005,p-3*a)
+        rr=(p-tp)/(sl-p);s=sc("SHORT")
+        if rr>=1.8 and s>=TF[tf][2]:out.append(("SHORT","BREAKOUT",s,sl,tp,rr))
+
+    if not out:return
+    x=max(out,key=lambda z:z[2])
+    return dict(sym=sym,tf=tf,dir=x[0],type=x[1],score=x[2],
+                entry=p,sl=x[3],tp=x[4],rr=x[5])
 
 def load(p,d):
     try:
-        with open(p,encoding="utf-8") as f:return json.load(f)
+        with open(p,encoding="utf8") as f:return json.load(f)
     except:return d
 
 def save(p,d):
-    with open(p+".tmp","w",encoding="utf-8") as f:json.dump(d,f,ensure_ascii=False,indent=2)
+    with open(p+".tmp","w",encoding="utf8") as f:
+        json.dump(d,f,ensure_ascii=False,indent=2)
     os.replace(p+".tmp",p)
 
 def send(s):
     if not WEBHOOK:return False
-    text=f"**币种**：{s['sym']}\n**周期**：{NAMES[s['tf']]}\n**类型**：{TYPES[s['type']]}\n**方向**：{DIRS[s['dir']]}\n**评分**：{s['score']}\n**入场**：{s['entry']:.8g}\n**止损**：{s['sl']:.8g}\n**止盈**：{s['tp']:.8g}\n**盈亏比**：{s['rr']:.2f}\n**时间**：{s['time']}"
-    p={"msg_type":"interactive","card":{"header":{"title":{"tag":"lark_md","content":"**宝宝巴士🚌快上车**"}},"elements":[{"tag":"div","text":{"tag":"lark_md","content":text}}]}}
-    time.sleep(FEISHU_GAP+random.uniform(.1,.5))
+    text=(
+        f"**币种**：{s['sym']}\n"
+        f"**周期**：{CN[s['tf']]}\n"
+        f"**类型**：{TYP[s['type']]}\n"
+        f"**方向**：{DIR[s['dir']]}\n"
+        f"**评分**：{s['score']}\n"
+        f"**入场**：{s['entry']:.8g}\n"
+        f"**止损**：{s['sl']:.8g}\n"
+        f"**止盈**：{s['tp']:.8g}\n"
+        f"**盈亏比**：{s['rr']:.2f}\n"
+        f"**时间**：{s['time']}"
+    )
+    p={"msg_type":"interactive","card":{
+        "header":{"title":{"tag":"lark_md","content":"**宝宝巴士🚌快上车**"}},
+        "elements":[{"tag":"div","text":{"tag":"lark_md","content":text}}]}}
+    time.sleep(2+random.random())
     for i in range(3):
         try:
             r=requests.post(WEBHOOK,json=p,timeout=12)
-            if r.status_code==429:time.sleep(min(5*2**i,30));continue
+            if r.status_code==429:
+                time.sleep(min(5*2**i,30));continue
             return r.ok
-        except:time.sleep(2*(i+1))
+        except:
+            time.sleep(2+i)
     return False
 
 def evaluate(s):
-    df=candles(s["sym"],TF[s["tf"]]["bar"],300)
-    if df is None:return
-    future=df[df.ts>s["ts"]];bars=max(1,int(TF[s["tf"]]["exp"]*60/{"15m":15,"1H":60,"4H":240,"1D":1440}[s["tf"]]))
-    for _,r in future.iloc[:bars].iterrows():
+    d=candles(s["sym"],TF[s["tf"]][0],300)
+    if d is None:return
+    unit={"15m":15,"1H":60,"4H":240,"1D":1440}[s["tf"]]
+    bars=max(1,int(TF[s["tf"]][3]*60/unit))
+    f=d[d.ts>s["ts"]].iloc[:bars]
+    for _,r in f.iterrows():
         sl,tp=(r.l<=s["sl"],r.h>=s["tp"]) if s["dir"]=="LONG" else (r.h>=s["sl"],r.l<=s["tp"])
-        if sl and tp:return "LOSS"
-        if tp:return "WIN"
         if sl:return "LOSS"
-    return "EXPIRED" if len(future)>=bars else None
+        if tp:return "WIN"
+    return "EXPIRED" if len(f)>=bars else None
 
 def main():
-    global breaker
-    sent=load("sent_cache.json",{});records=load("signals_record.json",[])
-    cutoff=(datetime.now(timezone.utc)-timedelta(hours=48)).timestamp()
-    sent={k:v for k,v in sent.items() if v>cutoff}
-    syms=coins(150)
+    if blocked:return
+    sent=load("sent_cache.json",{})
+    records=load("signals_record.json",[])
+    cut=(datetime.now(timezone.utc)-timedelta(hours=48)).timestamp()
+    sent={k:v for k,v in sent.items() if v>cut}
+
+    syms=coins()
     if not syms:
-        print("[错误] 未获取到币种列表");return
-    print(f"[启动] {len(syms)}个币种");start_ws(syms);time.sleep(2)
+        print("[错误] Binance Futures API 无法访问")
+        raise SystemExit(1)
 
-    for tf in TF:
-        if breaker:print("[中断] API保护");break
-        if not ok_t(tf):print(f"[{tf}] 未到触发时间");continue
-        ids={x.get("id") for x in records};cs=ss=0;print(f"扫描周期 {tf}...")
+    print(f"[启动] {len(syms)}个币种")
+    ids={x.get("id") for x in records}
 
-        for sym in current_symbols():
-            if breaker:break
-            df=candles(sym,TF[tf]["bar"],TF[tf]["limit"]);s=signal(df,tf,sym)
+    for tf,(bar,limit,need,_) in TF.items():
+        if blocked:break
+        now=datetime.now(timezone.utc)
+        if tf=="1D" and not(now.hour==0 and 30<=now.minute<45):continue
+        if tf=="4H" and not(now.hour%4==0 and 15<=now.minute<30):continue
+        if tf=="1H" and now.minute>=15:continue
+
+        print(f"[扫描] {tf}")
+        for sym in syms:
+            if blocked:break
+            d=candles(sym,bar,limit)
+            s=signal(d,tf,sym)
             if not s:continue
-            s["ts"]=int(df.ts.iloc[-1]);s["time"]=datetime.fromtimestamp(s["ts"]/1000,timezone.utc).strftime("%Y-%m-%d %H:%M")
-            sid=f"{sym}|{tf}|{s['dir']}|{s['type']}|{s['ts']}";cs+=1
-            print(f" → {sym} {s['dir']} {s['type']} 评分{s['score']} 入场{s['entry']:.6g}")
-            if sid not in ids:records.append({"id":sid,**s,"result":None,"created":int(time.time())});ids.add(sid)
-            if sid not in sent and send(s):sent[sid]=int(time.time());ss+=1
 
-        print(f"[{tf}] 信号{cs} 已发送{ss}");save("sent_cache.json",sent);save("signals_record.json",records)
+            s["ts"]=int(d.ts.iloc[-1])
+            s["time"]=datetime.fromtimestamp(s["ts"]/1000,timezone.utc).strftime("%Y-%m-%d %H:%M")
+            sid=f"{sym}|{tf}|{s['dir']}|{s['type']}|{s['ts']}"
+
+            print(f"→ {sym} {s['dir']} {s['type']} {s['score']}分")
+
+            if sid not in ids:
+                records.append({"id":sid,**s,"result":None,"created":int(time.time())})
+                ids.add(sid)
+
+            if sid not in sent and send(s):
+                sent[sid]=int(time.time())
+
+        save("sent_cache.json",sent)
+        save("signals_record.json",records)
 
     for r in records:
         if not r.get("result"):
             x=evaluate(r)
-            if x:r["result"]=x;r["result_time"]=int(time.time())
+            if x:
+                r["result"]=x
+                r["result_time"]=int(time.time())
 
-    save("sent_cache.json",sent);save("signals_record.json",records)
-    print("本轮扫描结束")
+    save("sent_cache.json",sent)
+    save("signals_record.json",records)
+    print("[完成] 本轮扫描结束")
 
-if __name__=="__main__":main()
+if __name__=="__main__":
+    main()
