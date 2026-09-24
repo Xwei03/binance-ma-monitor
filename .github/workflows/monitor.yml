@@ -1,10 +1,10 @@
-name: Binance Monitor
+name: OKX Monitor
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: binance-monitor
+  group: okx-monitor
   cancel-in-progress: true
 
 permissions:
@@ -26,11 +26,6 @@ jobs:
 
       - name: Install
         run: pip install requests pandas
-
-      - name: Test Binance
-        run: |
-          echo "Testing Binance Futures..."
-          curl -I --max-time 10 https://fapi.binance.com/fapi/v1/ping || true
 
       - name: Run
         env:
