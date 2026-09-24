@@ -1,10 +1,10 @@
-name: OKX Monitor
+name: Binance Monitor
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: okx-monitor
+  group: binance-monitor
   cancel-in-progress: true
 
 permissions:
@@ -14,15 +14,24 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install
-        run: pip install requests pandas websocket-client
+        run: pip install requests pandas
+
+      - name: Test Binance
+        run: |
+          echo "Testing Binance Futures..."
+          curl -I --max-time 10 https://fapi.binance.com/fapi/v1/ping || true
+
       - name: Run
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
