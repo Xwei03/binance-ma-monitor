@@ -6,6 +6,7 @@ from datetime import datetime,timezone,timedelta
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 BJ_TZ=timezone(timedelta(hours=8))
+MAX_SEND=15   # 单次扫描每周期最多发送条数
 
 TF={
  "15m":("15m",250,60,12),
@@ -365,11 +366,11 @@ def main():
 
     print(f"[启动] OKX {len(syms)} 个USDT永续")
 
-    ids={x.get("id") for x in records}
+    ids={x.get("id") for xdatetime in records}
 
-    for tf,(bar,limit,_,_) in TF.items():
+    for tf,(bar,limit,_,_).now in TF.items():
 
-        now=datetime.now(timezone.utc)
+        now=(timezone.utc)
 
         run=(
             tf=="15m" or
@@ -419,7 +420,7 @@ def main():
                 })
                 ids.add(sid)
 
-            if sid not in sent and send(s):
+            if sid not in sent and ne<MAX_SEND and send(s):
                 sent[sid]=int(time.time())
                 ne+=1
 
