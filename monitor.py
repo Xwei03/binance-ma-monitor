@@ -5,89 +5,133 @@ from datetime import datetime,timezone,timedelta
 
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
-GAP=.12
-TF={
-"15m":("15m",250,60,12),
-"1H":("1H",250,62,48),
-"4H":("4H",250,65,120),
-"1D":("1D",250,68,336)
-}
+TF={"15m":("15m",250,60,12),"1H":("1H",250,62,48),
+    "4H":("4H",250,65,120),"1D":("1D",250,68,336)}
 CN={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"TREND":"趋势","BREAKOUT":"突破"}
 cache={}
+btc_cache={}
 stop=False
 
-def get(path,p=None):
+
+def get(path,p):
     global stop
     if stop:return
-    for i in range(4):
+    for i in range(5):
         try:
-            time.sleep(GAP+random.random()*.08)
+            time.sleep(.15+random.random()*.15)
             r=requests.get(BASE+path,params=p,timeout=15)
-            if r.status_code in (403,429):
-                print(f"[OKX] HTTP {r.status_code} 重试{i+1}/4")
-                time.sleep(min(3*2**i,30));continue
+
+            if r.status_code==429 or r.status_code>=500:
+                w=min(2**i*3,30)+random.random()
+                print(f"[OKX] HTTP {r.status_code}，等待{w:.1f}s")
+                time.sleep(w)
+                continue
+
+            if r.status_code in (403,451):
+                print(f"[OKX] HTTP {r.status_code}，停止本轮")
+                stop=True
+                return
+
             r.raise_for_status()
             x=r.json()
-            if x.get("code")=="0":return x["data"]
-            print(f"[OKX] {x.get('code')} {x.get('msg')}")
+
+            if x.get("code")=="0":
+                return x.get("data",[])
+
+            code=x.get("code")
+            msg=x.get("msg","")
+
+            if code=="50011":
+                w=min(2**i*3,30)+random.random()
+                print(f"[OKX] 50011限速，等待{w:.1f}s")
+                time.sleep(w)
+                continue
+
+            print(f"[OKX] {code}: {msg}")
+
+            if code in ("50004","50013","50026"):
+                time.sleep(min(2**i*2,20))
+                continue
+            return
+
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError) as e:
+            print(f"[OKX] {type(e).__name__}")
+            time.sleep(min(2**i*2,20))
         except Exception as e:
             print(f"[OKX] {type(e).__name__}")
-        time.sleep(2+i)
-    stop=True
-    print("[OKX] API连续失败，停止运行")
+            time.sleep(min(2**i*2,20))
+
+    print(f"[OKX] 重试失败: {path}")
+
 
 def coins():
     print("[币种] 获取永续合约列表...")
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:
-        print("[币种] 获取失败");return []
+        print("[币种] 获取失败")
+        return []
+
     live={x["instId"] for x in a
           if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
     vol={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
-    r=sorted(live,key=vol.get,reverse=True)[:150]
+
+    r=sorted(live,key=lambda x:vol.get(x,0),reverse=True)[:150]
     print(f"[币种] 共获取 {len(r)} 个")
     return r
 
+
 def candles(sym,bar,n=250):
-    k=f"{sym}_{bar}"
-    if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
+    k=(sym,bar,n)
+    if k in cache and time.time()-cache[k][0]<30:
+        return cache[k][1]
+
     x=get("/api/v5/market/candles",
-          {"instId":sym,"bar":bar,"limit":str(n)})
+         {"instId":sym,"bar":bar,"limit":str(n)})
     if not x:return
-    x=reversed(x)
-    d=pd.DataFrame(
-        [[int(a[0]),*map(float,a[1:6]),a[8]] for a in x],
-        columns=["ts","o","h","l","c","v","ok"]
-    )
-    d=d[d.ok=="1"].reset_index(drop=True)
-    cache[k]=(time.time(),d)
-    return d
 
-def ema(s,n):return s.ewm(span=n,adjust=False).mean()
+    try:
+        d=pd.DataFrame(
+            [[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
+            columns=["ts","o","h","l","c","v","ok"])
+        d=d[d.ok=="1"].reset_index(drop=True)
+        if len(d)<10:return
+        cache[k]=(time.time(),d)
+        return d
+    except Exception as e:
+        print(f"[K线] {sym} {bar}: {type(e).__name__}")
 
-def atr(d,n=14):
+
+def ema(s,n):
+    return s.ewm(span=n,adjust=False).mean()
+
+
+def atr(d):
     p=d.c.shift()
-    return pd.concat(
-        [d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],
-        axis=1
-    ).max(axis=1).rolling(n).mean()
+    return pd.concat([
+        d.h-d.l,(d.h-p).abs(),(d.l-p).abs()
+    ],axis=1).max(axis=1).rolling(14).mean()
+
 
 def btc(bar):
+    if bar in btc_cache:return btc_cache[bar]
     d=candles("BTC-USDT-SWAP",bar,220)
     if d is None or len(d)<205:return 0
-    return 15 if d.c.iloc[-1]>ema(d.c,200).iloc[-1] else -15
+    btc_cache[bar]=15 if d.c.iloc[-1]>ema(d.c,200).iloc[-1] else -15
+    return btc_cache[bar]
+
 
 def signal(d,tf,sym):
     if d is None or len(d)<210:return
 
     p=d.c.iloc[-1]
-    e20,e60,e120,e200=[ema(d.c,n).iloc[-1]
-                       for n in (20,60,120,200)]
+    e20,e60,e120,e200=[ema(d.c,n).iloc[-1] for n in (20,60,120,200)]
     a=atr(d).iloc[-1]
     aa=atr(d).iloc[-6:-1].mean()
+
     if pd.isna(a) or pd.isna(aa):return
 
     body=abs(p-d.o.iloc[-1])
@@ -95,17 +139,15 @@ def signal(d,tf,sym):
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     bs=btc(TF[tf][0])
     need=TF[tf][2]
+    out=[]
 
     def score(x):
         s=30 if vr>=2 else 15 if vr>=1.5 else 0
         s+=25 if body/rng>=.6 else 12 if body/rng>=.45 else 0
         s+=20 if a>aa*1.05 else 0
         s+=min(max(bs if x=="LONG" else -bs,0),15)
-        s+=10 if (x=="LONG" and p>e20) or \
-                 (x=="SHORT" and p<e20) else 0
+        s+=10 if (x=="LONG" and p>e20) or (x=="SHORT" and p<e20) else 0
         return s
-
-    out=[]
 
     def add(x,t,sl,tp):
         rr=(tp-p)/(p-sl) if x=="LONG" else (p-tp)/(sl-p)
@@ -136,23 +178,26 @@ def signal(d,tf,sym):
 
     x=max(out,key=lambda z:z[2])
     return dict(
-        sym=sym,tf=tf,dir=x[0],type=x[1],
-        score=x[2],entry=p,sl=x[3],tp=x[4],rr=x[5]
+        sym=sym,tf=tf,dir=x[0],type=x[1],score=x[2],
+        entry=p,sl=x[3],tp=x[4],rr=x[5]
     )
+
 
 def load(p,d):
     try:
         with open(p,encoding="utf8") as f:return json.load(f)
     except:return d
 
+
 def save(p,d):
     with open(p+".tmp","w",encoding="utf8") as f:
         json.dump(d,f,ensure_ascii=False)
     os.replace(p+".tmp",p)
 
+
 def send(s):
     if not WEBHOOK:
-        print("[飞书] 未配置 WEBHOOK，跳过发送")
+        print("[飞书] 未设置WEBHOOK")
         return False
 
     text="\n".join([
@@ -178,52 +223,68 @@ def send(s):
                 }
             },
             "elements":[
-                {"tag":"div","text":{"tag":"lark_md","content":text}}
+                {
+                    "tag":"div",
+                    "text":{
+                        "tag":"lark_md",
+                        "content":text
+                    }
+                }
             ]
         }
     }
 
     time.sleep(2+random.random())
 
-    for i in range(3):
+    for i in range(4):
         try:
             r=requests.post(WEBHOOK,json=data,timeout=12)
-            if r.status_code==429:
-                print(f"[飞书] 限流 重试{i+1}/3")
-                time.sleep(min(5*2**i,30))
-                continue
+
             if r.ok:
-                print(f"[飞书] 已发送 {s['sym']} {s['tf']}")
+                print(f"[飞书] 发送成功 {s['sym']} {s['tf']}")
                 return True
-            print(f"[飞书] 发送失败 HTTP {r.status_code}")
+
+            print(f"[飞书] HTTP {r.status_code}: {r.text[:300]}")
+
+            if r.status_code==429 or r.status_code>=500:
+                time.sleep(min(5*2**i,30)+random.random())
+                continue
+
             return False
+
         except Exception as e:
-            print(f"[飞书] 异常 {type(e).__name__}")
-            time.sleep(2+i)
+            print(f"[飞书] {type(e).__name__}")
+            time.sleep(min(3*(i+1),15))
+
+    print(f"[飞书] 最终发送失败 {s['sym']} {s['tf']}")
     return False
+
 
 def evaluate(s):
     d=candles(s["sym"],TF[s["tf"]][0],300)
     if d is None:return
 
     unit={"15m":15,"1H":60,"4H":240,"1D":1440}[s["tf"]]
-    bars=max(1,int(TF[s["tf"]][3]*60/unit))
+    bars=int(TF[s["tf"]][3]*60/unit)
     f=d[d.ts>s["ts"]].iloc[:bars]
 
     for _,r in f.iterrows():
         if s["dir"]=="LONG":
-            sl=r.l<=s["sl"];tp=r.h>=s["tp"]
+            sl=r.l<=s["sl"]
+            tp=r.h>=s["tp"]
         else:
-            sl=r.h>=s["sl"];tp=r.l<=s["tp"]
+            sl=r.h>=s["sl"]
+            tp=r.l<=s["tp"]
 
-        if tp and sl:return "LOSS"
+        if sl and tp:return "LOSS"
         if tp:return "WIN"
         if sl:return "LOSS"
 
     return "EXPIRED" if len(f)>=bars else None
 
+
 def main():
-    global stop
+    global stop,btc_cache
 
     print("="*40)
     print(f"[开始] {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
@@ -236,6 +297,7 @@ def main():
     sent={k:v for k,v in sent.items() if v>cut}
 
     syms=coins()
+
     if not syms:
         print("[错误] OKX无法获取永续合约")
         raise SystemExit(1)
@@ -252,16 +314,21 @@ def main():
         now=datetime.now(timezone.utc)
 
         if tf=="1D" and not(now.hour==0 and 30<=now.minute<45):
-            print(f"[{tf}] 未到触发时间，跳过");continue
+            print(f"[{tf}] 未到触发时间，跳过")
+            continue
 
         if tf=="4H" and not(now.hour%4==0 and 15<=now.minute<30):
-            print(f"[{tf}] 未到触发时间，跳过");continue
+            print(f"[{tf}] 未到触发时间，跳过")
+            continue
 
         if tf=="1H" and now.minute>=15:
-            print(f"[{tf}] 未到触发时间，跳过");continue
+            print(f"[{tf}] 未到触发时间，跳过")
+            continue
 
         print(f"[扫描] {tf}")
-        cnt_sig=cnt_sent=0
+        btc_cache={}
+        cnt_sig=0
+        cnt_sent=0
 
         for sym in syms:
             if stop:
@@ -270,6 +337,7 @@ def main():
 
             d=candles(sym,bar,limit)
             s=signal(d,tf,sym)
+
             if not s:continue
 
             s["ts"]=int(d.ts.iloc[-1])
@@ -278,6 +346,7 @@ def main():
             ).strftime("%Y-%m-%d %H:%M")
 
             sid=f"{sym}|{tf}|{s['dir']}|{s['type']}|{s['ts']}"
+
             cnt_sig+=1
             print(f"→ {sym} {s['dir']} {s['type']} {s['score']}分")
 
@@ -324,6 +393,7 @@ def main():
     print(f"[完成] 本轮扫描结束 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"[统计] 信号记录总数：{len(records)}，已发送缓存：{len(sent)}")
     print("="*40)
+
 
 if __name__=="__main__":
     main()
