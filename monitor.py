@@ -277,7 +277,7 @@ def send(s):
             "header":{
                 "title":{
                     "tag":"lark_md",
-                    "content":"**宝宝巴士🚌上车就赚 警报**"
+                    "content":"**宝宝巴士🚌上车就赚**"
                 }
             },
             "elements":[
