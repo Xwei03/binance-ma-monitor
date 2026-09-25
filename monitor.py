@@ -255,6 +255,7 @@ def send(s):
     )
 
     text="\n".join([
+        f"**🚨 警报**",
         f"**{title}**",
         f"**币种**：{s['sym']}",
         f"**周期**：{CN[s['tf']]}",
@@ -274,7 +275,7 @@ def send(s):
             "header":{
                 "title":{
                     "tag":"lark_md",
-                    "content":"**宝宝巴士🚌上车就赚**"
+                    "content":"**宝宝巴士🚌上车就赚 警报**"
                 }
             },
             "elements":[
@@ -288,14 +289,17 @@ def send(s):
     for i in range(4):
         try:
             r=requests.post(WEBHOOK,json=data,timeout=12)
-            if r.ok:
+            try:
+                res=r.json()
+            except:
+                res={}
+
+            if r.status_code==200 and res.get("code")==0:
                 print(f"[飞书] 已发送 {s['sym']} {s['tf']} {s['type']}")
                 return True
-            if r.status_code==429 or r.status_code>=500:
-                time.sleep(min(5*2**i,30)+random.random())
-                continue
-            print(f"[飞书] HTTP {r.status_code}")
-            return False
+            else:
+                print(f"[飞书] 发送被拒! HTTP:{r.status_code} 返回:{r.text}")
+                return False
         except Exception as e:
             print(f"[飞书] {type(e).__name__}")
             time.sleep(min(3*(i+1),15))
