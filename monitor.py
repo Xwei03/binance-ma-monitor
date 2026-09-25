@@ -144,15 +144,15 @@ def prepare(d,tf,sym):
 
         score=0
 
-        score+=20 if ar<=.85 else 15 if ar<=.95 else 10 if ar<=1 else 5
-        score+=15 if dist<=.0075 else 12 if dist<=.012 else 8 if dist<=.018 else 4
-        score+=15 if struct else 8 if weak else 0
-        score+=10 if trend else 7 if (
+        score+=10 if ar<=.85 else 6 if ar<=.95 else 3 if ar<=1 else 1
+        score+=10 if dist<=.0075 else 8 if dist<=.012 else 5 if dist<=.018 else 2
+        score+=22 if struct else 11 if weak else 0
+        score+=15 if trend else 10 if (
             e20.iloc[-1]>e60.iloc[-1]
             if side=="LONG"
             else e20.iloc[-1]<e60.iloc[-1]
-        ) else 3
-        score+=10 if .7<=vr<1.5 and vr3>=1.05 else 6 if .6<=vr<1.5 and vr3>=1 else 0
+        ) else 5
+        score+=12 if .7<=vr<1.5 and vr3>=1.05 else 7 if .6<=vr<1.5 and vr3>=1 else 0
 
         if side=="LONG":
             pressure=d.h.iloc[-61:-11].max()
@@ -161,7 +161,7 @@ def prepare(d,tf,sym):
             support=d.l.iloc[-61:-11].min()
             space=(lo-support)/lo if support<lo else 0
 
-        score+=10 if space>=.04 else 8 if space>=.025 else 6 if space>=.015 else 3 if space>=.008 else 0
+        score+=16 if space>=.04 else 11 if space>=.025 else 7 if space>=.015 else 4 if space>=.008 else 0
         score+=10 if (bs>0 if side=="LONG" else bs<0) else 5 if bs==0 else 0
         score+=5 if body<.35 and ar<=1 else 3 if body<.45 else 0
 
