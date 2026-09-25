@@ -12,6 +12,7 @@ TF={
  "4H":("4H",250,65,120),
  "1D":("1D",250,68,336)
 }
+DIST={"15m":.02,"1H":.025,"4H":.03,"1D":.035}
 CN={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -105,7 +106,8 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        if dist<=0 or dist>.025:continue
+        max_dist=min(DIST[tf]*max(ar,.6),.06)
+        if dist<=0 or dist>max_dist:continue
 
         if (
             (p>=hi if side=="LONG" else p<=lo)
