@@ -168,12 +168,12 @@ def prepare(d,tf,sym):
         if side=="LONG":
             structure_sl=lows.min()
             sl=structure_sl-.5*av
-            tp=pressure*.995
+            tp=pressure*.99
             rr=(tp-p)/(p-sl)
         else:
             structure_sl=highs.max()
             sl=structure_sl+.5*av
-            tp=support*1.005
+            tp=support*1.01
             rr=(p-tp)/(sl-p)
 
         if score>=70 and rr>=1.8:
@@ -211,19 +211,19 @@ def normal(d,tf,sym):
             })
 
     if e20>e60>e120 and p>e200:
-        add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.995,p+3*a))
+        add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
 
     if e20<e60<e120 and p<e200:
-        add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.005,p-3*a))
+        add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
 
     hi=d.h.iloc[-11:-1].max()
     lo=d.l.iloc[-11:-1].min()
 
     if p>hi and body>=.55 and vr>=1.5:
-        add("LONG","BREAKOUT",p-2.5*a,min(d.h.iloc[-61:-1].max()*.995,p+3*a))
+        add("LONG","BREAKOUT",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
 
     if p<lo and body>=.55 and vr>=1.5:
-        add("SHORT","BREAKOUT",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.005,p-3*a))
+        add("SHORT","BREAKOUT",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
 
     return max(out,key=lambda x:x["score"]) if out else None
 
