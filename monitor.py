@@ -117,6 +117,9 @@ def prepare(d,tf,sym):
         ):
             continue
 
+        if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):
+            continue
+
         struct=(
             lows[-1]>=lows[0] and lows[-1]>=lows[-2]
             if side=="LONG"
@@ -144,15 +147,15 @@ def prepare(d,tf,sym):
 
         score=0
 
-        score+=8 if ar<=.85 else 5 if ar<=.95 else 2 if ar<=1 else 1
-        score+=8 if dist<=.0075 else 6 if dist<=.012 else 4 if dist<=.018 else 2
-        score+=22 if struct else 7 if weak else 0
-        score+=18 if trend else 6 if (
+        score+=18 if ar<=.85 else 12 if ar<=.95 else 6 if ar<=1 else 2
+        score+=16 if dist<=.0075 else 10 if dist<=.012 else 5 if dist<=.018 else 2
+        score+=15 if struct else 8 if weak else 0
+        score+=14 if trend else 8 if (
             e20.iloc[-1]>e60.iloc[-1]
             if side=="LONG"
             else e20.iloc[-1]<e60.iloc[-1]
-        ) else 3
-        score+=16 if .7<=vr<1.5 and vr3>=1.05 else 4 if .6<=vr<1.5 and vr3>=1 else 0
+        ) else 4
+        score+=14 if .7<=vr<1.5 and vr3>=1.05 else 8 if .6<=vr<1.5 and vr3>=1 else 0
 
         if side=="LONG":
             pressure=d.h.iloc[-61:-11].max()
@@ -161,9 +164,15 @@ def prepare(d,tf,sym):
             support=d.l.iloc[-61:-11].min()
             space=(lo-support)/lo if support<lo else 0
 
-        score+=14 if space>=.04 else 7 if space>=.025 else 4 if space>=.015 else 2 if space>=.008 else 0
-        score+=10 if (bs>0 if side=="LONG" else bs<0) else 5 if bs==0 else 0
-        score+=4 if body<.35 and ar<=1 else 2 if body<.45 else 0
+        score+=10 if space>=.04 else 6 if space>=.025 else 3 if space>=.015 else 1 if space>=.008 else 0
+        score+=8 if (bs>0 if side=="LONG" else bs<0) else 4 if bs==0 else 0
+        score+=5 if body<.35 and ar<=1 else 3 if body<.45 else 0
+
+        if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]: score-=12
+        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]: score-=12
+
+        if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]: score-=10
+        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]: score-=10
 
         if side=="LONG":
             structure_sl=lows.min()
