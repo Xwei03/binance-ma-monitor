@@ -5,6 +5,7 @@ from datetime import datetime,timezone,timedelta
 
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
+BJ_TZ=timezone(timedelta(hours=8))
 
 TF={
  "15m":("15m",250,60,12),
@@ -346,7 +347,7 @@ def main():
     global btc_cache
 
     print("="*40)
-    print(f"[开始] {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"[开始] {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M:%S')} 北京时间")
     print("="*40)
 
     sent=load("sent_cache.json",{})
@@ -399,7 +400,7 @@ def main():
 
             s["ts"]=int(d.ts.iloc[-1])
             s["time"]=datetime.fromtimestamp(
-                s["ts"]/1000,timezone.utc
+                s["ts"]/1000,BJ_TZ
             ).strftime("%Y-%m-%d %H:%M")
 
             sid=(
@@ -449,7 +450,7 @@ def main():
     git_save()
 
     print("="*40)
-    print(f"[完成] {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"[完成] {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M:%S')} 北京时间")
     print(f"[统计] 监控币种 {len(syms)}，历史信号 {len(records)}")
     print("="*40)
 
