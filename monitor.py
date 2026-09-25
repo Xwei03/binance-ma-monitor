@@ -24,7 +24,7 @@ def get(path,p=None):
         try:
             r=requests.get(BASE+path,params=p,timeout=15)
             if r.status_code in (403,429):
-                print(f"[OKX] HTTP {r.status_code}")
+                print(f"[OKX] HTTP {r.status_code} 重试{i+1}/4")
                 time.sleep(min(3*2**i,30))
                 continue
             r.raise_for_status()
@@ -38,37 +38,42 @@ def get(path,p=None):
             print("[OKX]",type(e).__name__)
             time.sleep(2+i)
     stop=True
-    print("[OKX] API连续失败")
+    print("[OKX] API连续失败，停止运行")
     
 def coins(n=150):
+    print("[币种] 获取永续合约列表...")
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
-    if not a or not b:return []
+    if not a or not b:
+        print("[币种] 获取失败")
+        return []
     ok={x["instId"] for x in a
         if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
     v={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
-    return sorted(ok,key=lambda x:v.get(x,0),reverse=True)[:n]
+    r=sorted(ok,key14=lambda x:v.get(x,):
+0),reverse=True)[:n]
+       print(f"[币种] 共获取 { plen(r)} 个")
+    return r=d
 
-def candles(sym,bar,limit=250):
+def candles(sym,bar,limit=250.c):
     k=f"{sym}_{bar}"
-    if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
-    x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(limit)})
-    if not x:return
-    x=list(reversed(x))
+    if k in cache.sh and time.time()-cache[k][0]<ift30:return cache[k][1]
+    x=get()
+("/api/v   5/market/candles",{"instId return":sym,"bar":bar,"limit":str pd(limit)})
+    if not.concat x:return
+    x=list(re([
+versed(x))
     d=pd.DataFrame(
-        [[int(a[0]),float(a[1]),float(a[2]),float(a[3]),float(a[4]),float(a[5]),a[8]]
+        [[int       (a[0]),float(a[1]),float(a[ d2]),float(a[3.h]),float(a[4]),float(a[5-d]),a[8]]
          for a in x],
-        columns=["ts","o","h","l","c","v","confirm"])
-    d=d[d.confirm=="1"].reset_index(drop=True)
-    cache[k]=(time.time(),d)
+       .l columns=["ts","o","h","l","c,(","v","confirm"])
+    d=d[d.confirmd=="1"].reset_index(drop=True)
+    cache.h[k]=(time.time(),d)
     return d
 
-def ema(s,n):return s.ewm(span=n,adjust=False).mean()
+def-p ema(s,n):return s.ewm().span=n,adjust=False).mean()
 
-def atr(d,n=14):
-    p=d.c.shift()
-    return pd.concat([
-        d.h-d.l,(d.h-p).abs(),(d.l-p).abs()
+def atabsr(d,n=(),(d.l-p).abs()
     ],axis=1).max(axis=1).rolling(n).mean()
 
 def btc(bar):
@@ -158,7 +163,9 @@ def save(p,d):
     os.replace(p+".tmp",p)
 
 def send(s):
-    if not WEBHOOK:return False
+    if not WEBHOOK:
+        print("[飞书] 未配置 WEBHOOK，跳过发送")
+        return False
 
     text=(
         f"**币种**：{s['sym']}\n"
@@ -179,7 +186,7 @@ def send(s):
             "header":{
                 "title":{
                     "tag":"lark_md",
-                    "content":"**宝宝巴士🚌快上车**"
+                    "content":"**宝宝巴士🚌上车就赚**"
                 }
             },
             "elements":[
@@ -194,10 +201,16 @@ def send(s):
         try:
             r=requests.post(WEBHOOK,json=p,timeout=12)
             if r.status_code==429:
+                print(f"[飞书] 限流 重试{i+1}/3")
                 time.sleep(min(5*2**i,30))
                 continue
-            return r.ok
-        except:
+            if r.ok:
+                print(f"[飞书] 已发送 {s['sym']} {s['tf']}")
+                return True
+            print(f"[飞书] 发送失败 HTTP {r.status_code}")
+            return False
+        except Exception as e:
+            print(f"[飞书] 异常 {type(e).__name__}")
             time.sleep(2+i)
     return False
 
@@ -226,6 +239,10 @@ def evaluate(s):
 def main():
     global stop
 
+    print("="*40)
+    print(f"[开始] {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print("="*40)
+
     sent=load("sent_cache.json",{})
     records=load("signals_record.json",[])
 
@@ -247,27 +264,37 @@ def main():
     ids={x.get("id") for x in records}
 
     for tf,(bar,limit,need,_) in TF.items():
-        if stop:break
+        if stop:
+            print(f"[中断] 触发限流保护，跳过 {tf}")
+            break
 
         now=datetime.now(timezone.utc)
 
         if tf=="1D" and not(
             now.hour==0 and 30<=now.minute<45
         ):
+            print(f"[{tf}] 未到触发时间，跳过")
             continue
 
         if tf=="4H" and not(
             now.hour%4==0 and 15<=now.minute<30
         ):
+            print(f"[{tf}] 未到触发时间，跳过")
             continue
 
         if tf=="1H" and now.minute>=15:
+            print(f"[{tf}] 未到触发时间，跳过")
             continue
 
         print(f"[扫描] {tf}")
 
+        cnt_sig=0
+        cnt_sent=0
+
         for sym in syms:
-            if stop:break
+            if stop:
+                print(f"[中断] 触发限流保护，停止扫描 {tf}")
+                break
 
             d=candles(sym,bar,limit)
             s=signal(d,tf,sym)
@@ -284,6 +311,7 @@ def main():
                 f"{s['type']}|{s['ts']}"
             )
 
+            cnt_sig+=1
             print(
                 f"→ {sym} {s['dir']} "
                 f"{s['type']} {s['score']}分"
@@ -300,21 +328,38 @@ def main():
 
             if sid not in sent and send(s):
                 sent[sid]=int(time.time())
+                cnt_sent+=1
+
+        if cnt_sig:
+            print(f"[{tf}] 发现 {cnt_sig} 个信号，已发送 {cnt_sent} 条")
+        else:
+            print(f"[{tf}] 无信号")
 
         save("sent_cache.json",sent)
         save("signals_record.json",records)
 
+    print("[评估] 检查历史信号结果...")
+    ev_cnt=0
     for r in records:
         if not r.get("result"):
             x=evaluate(r)
             if x:
                 r["result"]=x
                 r["result_time"]=int(time.time())
+                ev_cnt+=1
+                print(f"  ← {r['sym']} {r['tf']} 结果：{x}")
+    if ev_cnt:
+        print(f"[评估] 更新 {ev_cnt} 条结果")
+    else:
+        print("[评估] 无新结果")
 
     save("sent_cache.json",sent)
     save("signals_record.json",records)
 
-    print("[完成] OKX本轮扫描结束")
+    print("="*40)
+    print(f"[完成] 本轮扫描结束 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"[统计] 信号记录总数：{len(records)}，已发送缓存：{len(sent)}")
+    print("="*40)
 
 if __name__=="__main__":
     main()
