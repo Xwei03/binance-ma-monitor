@@ -185,7 +185,7 @@ def prepare(d,tf,sym):
             tp=support*1.01
             rr=(p-tp)/(sl-p)
 
-        if score>=70 and rr>=1.8:
+        if score>=75 and rr>=1.8:
             out.append({
                 "sym":sym,"tf":tf,"dir":side,"type":"PREPARE",
                 "score":score,"entry":p,"sl":sl,"tp":tp,"rr":rr,
