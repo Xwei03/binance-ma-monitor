@@ -1,3 +1,5 @@
+# 宝宝巴士🚌上车就赚 - OKX 多周期信号扫描
+# 15m / 1H / 4H / 1D | 100分制评分 | 飞书推送
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -5,10 +7,10 @@ BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 GAP=.12
 TF={
-"15m":("15m",250,68,12),
-"1H":("1H",250,70,48),
-"4H":("4H",250,72,120),
-"1D":("1D",250,74,336)
+"15m":("15m",250,60,12),
+"1H":("1H",250,62,48),
+"4H":("4H",250,65,120),
+"1D":("1D",250,68,336)
 }
 CN={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
@@ -20,61 +22,58 @@ def get(path,p=None):
     global stop
     if stop:return
     for i in range(4):
-        time.sleep(GAP+random.random()*.08)
         try:
+            time.sleep(GAP+random.random()*.08)
             r=requests.get(BASE+path,params=p,timeout=15)
             if r.status_code in (403,429):
                 print(f"[OKX] HTTP {r.status_code} 重试{i+1}/4")
-                time.sleep(min(3*2**i,30))
-                continue
+                time.sleep(min(3*2**i,30));continue
             r.raise_for_status()
             x=r.json()
-            if x.get("code")!="0":
-                print(f"[OKX] {x.get('code')} {x.get('msg')}")
-                time.sleep(2+i)
-                continue
-            return x.get("data",[])
+            if x.get("code")=="0":return x["data"]
+            print(f"[OKX] {x.get('code')} {x.get('msg')}")
         except Exception as e:
-            print("[OKX]",type(e).__name__)
-            time.sleep(2+i)
+            print(f"[OKX] {type(e).__name__}")
+        time.sleep(2+i)
     stop=True
     print("[OKX] API连续失败，停止运行")
-    
-def coins(n=150):
+
+def coins():
     print("[币种] 获取永续合约列表...")
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:
-        print("[币种] 获取失败")
-        return []
-    ok={x["instId"] for x in a
-        if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
-    v={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
-    r=sorted(ok,key14=lambda x:v.get(x,):
-0),reverse=True)[:n]
-       print(f"[币种] 共获取 { plen(r)} 个")
-    return r=d
+        print("[币种] 获取失败");return []
+    live={x["instId"] for x in a
+          if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
+    vol={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
+    r=sorted(live,key=vol.get,reverse=True)[:150]
+    print(f"[币种] 共获取 {len(r)} 个")
+    return r
 
-def candles(sym,bar,limit=250.c):
+def candles(sym,bar,n=250):
     k=f"{sym}_{bar}"
-    if k in cache.sh and time.time()-cache[k][0]<ift30:return cache[k][1]
-    x=get()
-("/api/v   5/market/candles",{"instId return":sym,"bar":bar,"limit":str pd(limit)})
-    if not.concat x:return
-    x=list(re([
-versed(x))
+    if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
+    x=get("/api/v5/market/candles",
+          {"instId":sym,"bar":bar,"limit":str(n)})
+    if not x:return
+    x=reversed(x)
     d=pd.DataFrame(
-        [[int       (a[0]),float(a[1]),float(a[ d2]),float(a[3.h]),float(a[4]),float(a[5-d]),a[8]]
-         for a in x],
-       .l columns=["ts","o","h","l","c,(","v","confirm"])
-    d=d[d.confirmd=="1"].reset_index(drop=True)
-    cache.h[k]=(time.time(),d)
+        [[int(a[0]),*map(float,a[1:6]),a[8]] for a in x],
+        columns=["ts","o","h","l","c","v","ok"]
+    )
+    d=d[d.ok=="1"].reset_index(drop=True)
+    cache[k]=(time.time(),d)
     return d
 
-def-p ema(s,n):return s.ewm().span=n,adjust=False).mean()
+def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
-def atabsr(d,n=(),(d.l-p).abs()
-    ],axis=1).max(axis=1).rolling(n).mean()
+def atr(d,n=14):
+    p=d.c.shift()
+    return pd.concat(
+        [d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],
+        axis=1
+    ).max(axis=1).rolling(n).mean()
 
 def btc(bar):
     d=candles("BTC-USDT-SWAP",bar,220)
@@ -83,74 +82,63 @@ def btc(bar):
 
 def signal(d,tf,sym):
     if d is None or len(d)<210:return
-    p=d.c.iloc[-1]
-    e20,e60,e120,e200=[
-        ema(d.c,n).iloc[-1] for n in (20,60,120,200)
-    ]
-    a=atr(d).iloc[-1]
-    if pd.isna(a):return
 
-    body=abs(d.c.iloc[-1]-d.o.iloc[-1])
+    p=d.c.iloc[-1]
+    e20,e60,e120,e200=[ema(d.c,n).iloc[-1]
+                       for n in (20,60,120,200)]
+    a=atr(d).iloc[-1]
+    aa=atr(d).iloc[-6:-1].mean()
+    if pd.isna(a) or pd.isna(aa):return
+
+    body=abs(p-d.o.iloc[-1])
     rng=max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     bs=btc(TF[tf][0])
-    aa=atr(d).iloc[-6:-1].mean()
+    need=TF[tf][2]
 
-    def sc(x):
+    def score(x):
         s=30 if vr>=2 else 15 if vr>=1.5 else 0
-        s+=25 if body/rng>=.7 else 12 if body/rng>=.55 else 0
+        s+=25 if body/rng>=.6 else 12 if body/rng>=.45 else 0
         s+=20 if a>aa*1.05 else 0
         s+=min(max(bs if x=="LONG" else -bs,0),15)
-        s+=10 if (
-            x=="LONG" and p>e20 or
-            x=="SHORT" and p<e20
-        ) else 0
+        s+=10 if (x=="LONG" and p>e20) or \
+                 (x=="SHORT" and p<e20) else 0
         return s
 
     out=[]
 
+    def add(x,t,sl,tp):
+        rr=(tp-p)/(p-sl) if x=="LONG" else (p-tp)/(sl-p)
+        s=score(x)
+        if rr>=1.8 and s>=need:
+            out.append((x,t,s,sl,tp,rr))
+
     if e20>e60>e120 and p>e200:
-        sl=p-2.5*a
-        tp=min(d.h.iloc[-61:-1].max()*.995,p+3*a)
-        rr=(tp-p)/(p-sl)
-        s=sc("LONG")
-        if rr>=1.8 and s>=TF[tf][2]:
-            out.append(("LONG","TREND",s,sl,tp,rr))
+        add("LONG","TREND",p-2.5*a,
+            min(d.h.iloc[-61:-1].max()*.995,p+3*a))
 
     if e20<e60<e120 and p<e200:
-        sl=p+2.5*a
-        tp=max(d.l.iloc[-61:-1].min()*1.005,p-3*a)
-        rr=(p-tp)/(sl-p)
-        s=sc("SHORT")
-        if rr>=1.8 and s>=TF[tf][2]:
-            out.append(("SHORT","TREND",s,sl,tp,rr))
+        add("SHORT","TREND",p+2.5*a,
+            max(d.l.iloc[-61:-1].min()*1.005,p-3*a))
 
-    hi=d.h.iloc[-21:-1].max()
-    lo=d.l.iloc[-21:-1].min()
+    hi=d.h.iloc[-11:-1].max()
+    lo=d.l.iloc[-11:-1].min()
 
     if p>hi and body/rng>=.55 and vr>=1.5:
-        sl=p-2.5*a
-        tp=min(d.h.iloc[-61:-1].max()*.995,p+3*a)
-        rr=(tp-p)/(p-sl)
-        s=sc("LONG")
-        if rr>=1.8 and s>=TF[tf][2]:
-            out.append(("LONG","BREAKOUT",s,sl,tp,rr))
+        add("LONG","BREAKOUT",p-2.5*a,
+            min(d.h.iloc[-61:-1].max()*.995,p+3*a))
 
     if p<lo and body/rng>=.55 and vr>=1.5:
-        sl=p+2.5*a
-        tp=max(d.l.iloc[-61:-1].min()*1.005,p-3*a)
-        rr=(p-tp)/(sl-p)
-        s=sc("SHORT")
-        if rr>=1.8 and s>=TF[tf][2]:
-            out.append(("SHORT","BREAKOUT",s,sl,tp,rr))
+        add("SHORT","BREAKOUT",p+2.5*a,
+            max(d.l.iloc[-61:-1].min()*1.005,p-3*a))
 
     if not out:return
+
     x=max(out,key=lambda z:z[2])
-    return {
-        "sym":sym,"tf":tf,"dir":x[0],"type":x[1],
-        "score":x[2],"entry":p,"sl":x[3],
-        "tp":x[4],"rr":x[5]
-    }
+    return dict(
+        sym=sym,tf=tf,dir=x[0],type=x[1],
+        score=x[2],entry=p,sl=x[3],tp=x[4],rr=x[5]
+    )
 
 def load(p,d):
     try:
@@ -159,7 +147,7 @@ def load(p,d):
 
 def save(p,d):
     with open(p+".tmp","w",encoding="utf8") as f:
-        json.dump(d,f,ensure_ascii=False,indent=2)
+        json.dump(d,f,ensure_ascii=False)
     os.replace(p+".tmp",p)
 
 def send(s):
@@ -167,20 +155,20 @@ def send(s):
         print("[飞书] 未配置 WEBHOOK，跳过发送")
         return False
 
-    text=(
-        f"**币种**：{s['sym']}\n"
-        f"**周期**：{CN[s['tf']]}\n"
-        f"**类型**：{TYP[s['type']]}\n"
-        f"**方向**：{DIR[s['dir']]}\n"
-        f"**评分**：{s['score']}\n"
-        f"**入场**：{s['entry']:.8g}\n"
-        f"**止损**：{s['sl']:.8g}\n"
-        f"**止盈**：{s['tp']:.8g}\n"
-        f"**盈亏比**：{s['rr']:.2f}\n"
+    text="\n".join([
+        f"**币种**：{s['sym']}",
+        f"**周期**：{CN[s['tf']]}",
+        f"**类型**：{TYP[s['type']]}",
+        f"**方向**：{DIR[s['dir']]}",
+        f"**评分**：{s['score']}",
+        f"**入场**：{s['entry']:.8g}",
+        f"**止损**：{s['sl']:.8g}",
+        f"**止盈**：{s['tp']:.8g}",
+        f"**盈亏比**：{s['rr']:.2f}",
         f"**时间**：{s['time']}"
-    )
+    ])
 
-    p={
+    data={
         "msg_type":"interactive",
         "card":{
             "header":{
@@ -199,7 +187,7 @@ def send(s):
 
     for i in range(3):
         try:
-            r=requests.post(WEBHOOK,json=p,timeout=12)
+            r=requests.post(WEBHOOK,json=data,timeout=12)
             if r.status_code==429:
                 print(f"[飞书] 限流 重试{i+1}/3")
                 time.sleep(min(5*2**i,30))
@@ -224,13 +212,11 @@ def evaluate(s):
 
     for _,r in f.iterrows():
         if s["dir"]=="LONG":
-            sl=r.l<=s["sl"]
-            tp=r.h>=s["tp"]
+            sl=r.l<=s["sl"];tp=r.h>=s["tp"]
         else:
-            sl=r.h>=s["sl"]
-            tp=r.l<=s["tp"]
+            sl=r.h>=s["sl"];tp=r.l<=s["tp"]
 
-        if sl and tp:return "LOSS"
+        if tp and sl:return "LOSS"
         if tp:return "WIN"
         if sl:return "LOSS"
 
@@ -246,15 +232,10 @@ def main():
     sent=load("sent_cache.json",{})
     records=load("signals_record.json",[])
 
-    cut=(
-        datetime.now(timezone.utc)-
-        timedelta(hours=48)
-    ).timestamp()
-
+    cut=(datetime.now(timezone.utc)-timedelta(hours=48)).timestamp()
     sent={k:v for k,v in sent.items() if v>cut}
 
-    syms=coins(150)
-
+    syms=coins()
     if not syms:
         print("[错误] OKX无法获取永续合约")
         raise SystemExit(1)
@@ -263,33 +244,24 @@ def main():
 
     ids={x.get("id") for x in records}
 
-    for tf,(bar,limit,need,_) in TF.items():
+    for tf,(bar,limit,_,_) in TF.items():
         if stop:
             print(f"[中断] 触发限流保护，跳过 {tf}")
             break
 
         now=datetime.now(timezone.utc)
 
-        if tf=="1D" and not(
-            now.hour==0 and 30<=now.minute<45
-        ):
-            print(f"[{tf}] 未到触发时间，跳过")
-            continue
+        if tf=="1D" and not(now.hour==0 and 30<=now.minute<45):
+            print(f"[{tf}] 未到触发时间，跳过");continue
 
-        if tf=="4H" and not(
-            now.hour%4==0 and 15<=now.minute<30
-        ):
-            print(f"[{tf}] 未到触发时间，跳过")
-            continue
+        if tf=="4H" and not(now.hour%4==0 and 15<=now.minute<30):
+            print(f"[{tf}] 未到触发时间，跳过");continue
 
         if tf=="1H" and now.minute>=15:
-            print(f"[{tf}] 未到触发时间，跳过")
-            continue
+            print(f"[{tf}] 未到触发时间，跳过");continue
 
         print(f"[扫描] {tf}")
-
-        cnt_sig=0
-        cnt_sent=0
+        cnt_sig=cnt_sent=0
 
         for sym in syms:
             if stop:
@@ -298,7 +270,6 @@ def main():
 
             d=candles(sym,bar,limit)
             s=signal(d,tf,sym)
-
             if not s:continue
 
             s["ts"]=int(d.ts.iloc[-1])
@@ -306,16 +277,9 @@ def main():
                 s["ts"]/1000,timezone.utc
             ).strftime("%Y-%m-%d %H:%M")
 
-            sid=(
-                f"{sym}|{tf}|{s['dir']}|"
-                f"{s['type']}|{s['ts']}"
-            )
-
+            sid=f"{sym}|{tf}|{s['dir']}|{s['type']}|{s['ts']}"
             cnt_sig+=1
-            print(
-                f"→ {sym} {s['dir']} "
-                f"{s['type']} {s['score']}分"
-            )
+            print(f"→ {sym} {s['dir']} {s['type']} {s['score']}分")
 
             if sid not in ids:
                 records.append({
@@ -339,17 +303,17 @@ def main():
         save("signals_record.json",records)
 
     print("[评估] 检查历史信号结果...")
-    ev_cnt=0
+    ev=0
     for r in records:
         if not r.get("result"):
             x=evaluate(r)
             if x:
                 r["result"]=x
                 r["result_time"]=int(time.time())
-                ev_cnt+=1
+                ev+=1
                 print(f"  ← {r['sym']} {r['tf']} 结果：{x}")
-    if ev_cnt:
-        print(f"[评估] 更新 {ev_cnt} 条结果")
+    if ev:
+        print(f"[评估] 更新 {ev} 条结果")
     else:
         print("[评估] 无新结果")
 
