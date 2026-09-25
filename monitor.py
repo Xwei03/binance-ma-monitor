@@ -399,9 +399,7 @@ def main():
             if not s:continue
 
             s["ts"]=int(d.ts.iloc[-1])
-            s["time"]=datetime.fromtimestamp(
-                s["ts"]/1000,BJ_TZ
-            ).strftime("%Y-%m-%d %H:%M")
+            s["time"]=datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
             sid=(
                 f"PREPARE|{sym}|{tf}|{s['dir']}|{s['anchor']}"
