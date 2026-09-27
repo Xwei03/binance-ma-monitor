@@ -307,19 +307,37 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
+    # 趋势：前高×0.985 与 p+3a 取近的
     if tf!="15m":
         if e20>e60>e120 and p>e200:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a),1.2)
+            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+3*a),1.2)
         if e20<e60<e120 and p<e200:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a),1.2)
+            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-3*a),1.2)
 
+    # 突破：前高×0.985 与 p+1.5risk 取近的
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
         sl=d.l.iloc[-2]-.3*a;risk=p-sl
-        if risk>0:add("LONG","BREAKOUT",sl,p+1.5*risk,1.5)
+        if risk>0:
+            pr=near_res(d,p)
+            base_tp=p+1.5*risk
+            if pr is not None:
+                cd=pr*0.985
+                tp=min(cd,base_tp) if cd>p else base_tp
+            else:
+                tp=base_tp
+            add("LONG","BREAKOUT",sl,tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
-        if risk>0:add("SHORT","BREAKOUT",sl,p-1.5*risk,1.5)
+        if risk>0:
+            sp=near_sup(d,p)
+            base_tp=p-1.5*risk
+            if sp is not None:
+                cd=sp*1.015
+                tp=max(cd,base_tp) if cd<p else base_tp
+            else:
+                tp=base_tp
+            add("SHORT","BREAKOUT",sl,tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
