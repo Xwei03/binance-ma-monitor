@@ -1,25 +1,32 @@
-# 宝宝巴士🚌上车就赚 - OKX 多周期信号扫描
-# 15m / 1H / 4H / 1D | 埋伏 + 趋势 + 突破 | 飞书推送
-import os,time,json,random,requests,pandas as pd,subprocess
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描
+# 只做 15m / 1H / 1D
+# 15m 埋伏=快进快出（贴前高、近止盈、4根不破就撤）
+# 1H 主力  1D 少量
+import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 BJ_TZ=timezone(timedelta(hours=8))
-MAX_SEND=15
+STATE="bus_state.json"
 
 TF={
- "15m":("15m",250,60,12),
- "1H":("1H",250,62,48),
- "4H":("4H",250,65,120),
- "1D":("1D",250,68,336)
+ "15m":("15m",250,85,4),
+ "1H":("1H",250,80,6),
+ "1D":("1D",250,78,4)
 }
-DIST={"15m":.028,"1H":.033,"4H":.04,"1D":.045}
-CN={"15m":"15分钟","1H":"1小时","4H":"4小时","1D":"1天"}
+DIST={"15m":.01,"1H":.018,"1D":.03}
+EXPIRE={"15m":4,"1H":6,"1D":4}
+DEDUP_BARS=8
+COOL_BARS=12
+CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False
+
+def now_bj():
+    return datetime.now(BJ_TZ)
 
 def get(path,p):
     global stop
@@ -81,9 +88,48 @@ def atr(d):
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
     d=candles("BTC-USDT-SWAP",bar,220)
-    if d is None:return 0
-    btc_cache[bar]=15 if d.c.iloc[-1]>ema(d.c,200).iloc[-1] else -15
-    return btc_cache[bar]
+    if d is None:
+        btc_cache[bar]=0
+        return 0
+    p=d.c.iloc[-1]
+    e20=ema(d.c,20).iloc[-1]
+    lo3=d.l.iloc[-3:].min()
+    lo6=d.l.iloc[-6:-3].min()
+    hi3=d.h.iloc[-3:].max()
+    hi6=d.h.iloc[-6:-3].max()
+    if p>e20 and lo3>=lo6: v=15
+    elif p<e20 and hi3<=hi6: v=-15
+    else: v=0
+    btc_cache[bar]=v
+    return v
+
+def bars_since(d,ts):
+    x=d[d.ts>=ts]
+    return max(int(len(x))-1,0)
+
+def load_state():
+    try:
+        with open(STATE,encoding="utf8") as f:return json.load(f)
+    except:
+        return {"sent":{},"cool":{},"live":[]}
+
+def save_state(st):
+    tmp=STATE+".tmp"
+    with open(tmp,"w",encoding="utf8") as f:
+        json.dump(st,f,ensure_ascii=False)
+    os.replace(tmp,STATE)
+
+def sdk(sym,tf,side):
+    return f"{sym}|{tf}|{side}"
+
+def too_soon(st,sym,tf,side,d,bars):
+    key=sdk(sym,tf,side)
+    ts=st.get("cool",{}).get(key) or st.get("sent",{}).get(key)
+    if not ts:return False
+    return bars_since(d,int(ts))<bars
+
+def mark(st,sym,tf,side,d,where="sent"):
+    st.setdefault(where,{})[sdk(sym,tf,side)]=int(d.ts.iloc[-1])
 
 def prepare(d,tf,sym):
     p=d.c.iloc[-1]
@@ -101,97 +147,104 @@ def prepare(d,tf,sym):
     ar=av/base
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],av*.01)
     bs=btc(TF[tf][0])
-
     lows=d.l.iloc[-6:-1].values
     highs=d.h.iloc[-6:-1].values
     out=[]
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        max_dist=min(DIST[tf]*max(ar,.6),.06)
-        if dist<=0 or dist>max_dist:continue
-
-        if (
-            (p>=hi if side=="LONG" else p<=lo)
-            or vr>=1.5 or ar>1.05 or body>=.55
-        ):
+        cap=.005 if tf=="15m" else DIST[tf]
+        if dist<=0 or dist>cap:continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:
             continue
-
-        if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):
-            continue
-
-        if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]: continue
-        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]: continue
+        if tf=="15m":
+            if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):
+                continue
+        else:
+            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):
+                continue
+        if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
+        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
+        if side=="LONG" and p<e20.iloc[-1]:continue
+        if side=="SHORT" and p>e20.iloc[-1]:continue
 
         struct=(
             lows[-1]>=lows[0] and lows[-1]>=lows[-2]
-            if side=="LONG"
-            else
+            if side=="LONG" else
             highs[-1]<=highs[0] and highs[-1]<=highs[-2]
         )
-
-        weak=(
-            lows[-1]>=lows[0]
-            if side=="LONG"
-            else
-            highs[-1]<=highs[0]
-        )
+        if not struct:continue
 
         trend=(
-            e20.iloc[-1]>e60.iloc[-1] and
-            p>e20.iloc[-1] and
-            e20.iloc[-1]>e20.iloc[-4]
-            if side=="LONG"
-            else
-            e20.iloc[-1]<e60.iloc[-1] and
-            p<e20.iloc[-1] and
-            e20.iloc[-1]<e20.iloc[-4]
+            e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]
+            if side=="LONG" else
+            e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4]
         )
 
         score=0
-
         score+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
-        score+=16 if dist<=.0075 else 10 if dist<=.012 else 5 if dist<=.018 else 2
-        score+=15 if struct else 8 if weak else 0
-        score+=14 if trend else 8 if (
-            e20.iloc[-1]>e60.iloc[-1]
-            if side=="LONG"
-            else e20.iloc[-1]<e60.iloc[-1]
-        ) else 4
-        score+=14 if .7<=vr<1.5 and vr3>=1.05 else 8 if .6<=vr<1.5 and vr3>=1 else 0
-
-        if side=="LONG":
-            pressure=d.h.iloc[-61:-11].max()
-            space=(pressure-hi)/hi if pressure>hi else 0
+        if tf=="15m":
+            score+=16 if dist<=.003 else 12 if dist<=.005 else 0
         else:
-            support=d.l.iloc[-61:-11].min()
-            space=(lo-support)/lo if support<lo else 0
-
-        score+=10 if space>=.04 else 6 if space>=.025 else 3 if space>=.015 else 1 if space>=.008 else 0
+            score+=16 if dist<=.0075 else 10 if dist<=.012 else 5 if dist<=.018 else 2
+        score+=15
+        score+=14 if trend else 8
+        score+=14 if .7<=vr<1.5 and vr3>=1.05 else 8 if .6<=vr<1.5 and vr3>=1 else 0
         score+=8 if (bs>0 if side=="LONG" else bs<0) else 4 if bs==0 else 0
         score+=5 if body<.35 and ar<=1 else 3 if body<.45 else 0
-
-        if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]: score-=10
-        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]: score-=10
+        if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:score-=10
+        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:score-=10
 
         if side=="LONG":
-            structure_sl=lows.min()
-            sl=structure_sl-.5*av
-            tp=pressure*.99
-            rr=(tp-p)/(p-sl)
+            structure_sl=float(min(lows))
+            sl=structure_sl-1.0*av
+            if p-sl<0.8*av:sl=p-0.8*av
+            risk=p-sl
+            if risk<=0:continue
+            if tf=="15m":
+                tp=p+1.8*risk
+                tag=hi*1.002
+                if tag>p:
+                    r=(tag-p)/risk
+                    if 1.5<=r<=2.0:tp=tag
+            elif tf=="1D":
+                sl=min(sl,p-2*av)
+                risk=p-sl
+                tp=p+2*risk
+            else:
+                pressure=d.h.iloc[-61:-11].max()
+                tp=min(pressure*.99,p+2.2*risk)
+            rr=(tp-p)/risk
         else:
-            structure_sl=highs.max()
-            sl=structure_sl+.5*av
-            tp=support*1.01
-            rr=(p-tp)/(sl-p)
+            structure_sl=float(max(highs))
+            sl=structure_sl+1.0*av
+            if sl-p<0.8*av:sl=p+0.8*av
+            risk=sl-p
+            if risk<=0:continue
+            if tf=="15m":
+                tp=p-1.8*risk
+                tag=lo*.998
+                if tag<p:
+                    r=(p-tag)/risk
+                    if 1.5<=r<=2.0:tp=tag
+            elif tf=="1D":
+                sl=max(sl,p+2*av)
+                risk=sl-p
+                tp=p-2*risk
+            else:
+                support=d.l.iloc[-61:-11].min()
+                tp=max(support*1.01,p-2.2*risk)
+            rr=(p-tp)/risk
 
-        if score>=75 and rr>=1.8:
+        need=85 if tf=="15m" else 80 if tf=="1H" else 78
+        need_rr=1.8
+        if score>=need and rr>=need_rr:
             out.append({
                 "sym":sym,"tf":tf,"dir":side,"type":"PREPARE",
-                "score":score,"entry":p,"sl":sl,"tp":tp,"rr":rr,
-                "anchor":int(d.ts.iloc[-11])
+                "score":int(score),"entry":p,"sl":sl,"tp":tp,"rr":rr,
+                "anchor":int(d.ts.iloc[-11]),
+                "expire":EXPIRE[tf],"hi":float(hi),"lo":float(lo)
             })
-
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym):
@@ -202,265 +255,166 @@ def normal(d,tf,sym):
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
     bs=btc(TF[tf][0])
+    if pd.isna(a) or pd.isna(aa):return
     out=[]
 
     def add(side,typ,sl,tp):
+        if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
+        if rr<=0:return
         s=(
             30 if vr>=2 else 15 if vr>=1.5 else 0
         )+(
             25 if body>=.6 else 12 if body>=.45 else 0
-        )+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)+(
-            10 if side=="LONG" and p>e20 or side=="SHORT" and p<e20 else 0
-        )
-        if rr>=1.8 and s>=TF[tf][2]:
+        )+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
+        if side=="LONG" and p>e20:s+=10
+        if side=="SHORT" and p<e20:s+=10
+        need=TF[tf][2]
+        need_rr=1.8
+        if rr>=need_rr and s>=need:
             out.append({
                 "sym":sym,"tf":tf,"dir":side,"type":typ,
-                "score":s,"entry":p,"sl":sl,"tp":tp,"rr":rr
+                "score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,
+                "expire":EXPIRE[tf]
             })
 
-    if e20>e60>e120 and p>e200:
-        add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
+    if tf!="15m":
+        if e20>e60>e120 and p>e200:
+            add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
+        if e20<e60<e120 and p<e200:
+            add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
 
-    if e20<e60<e120 and p<e200:
-        add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
-
-    hi=d.h.iloc[-11:-1].max()
-    lo=d.l.iloc[-11:-1].min()
-
-    if p>hi and body>=.55 and vr>=1.5:
-        add("LONG","BREAKOUT",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
-
-    if p<lo and body>=.55 and vr>=1.5:
-        add("SHORT","BREAKOUT",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
-
+    hi=d.h.iloc[-12:-2].max()
+    lo=d.l.iloc[-12:-2].min()
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
+        sl=d.l.iloc[-2]-.3*a
+        risk=p-sl
+        if risk>0:
+            add("LONG","BREAKOUT",sl,p+1.5*risk)
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
+        sl=d.h.iloc[-2]+.3*a
+        risk=sl-p
+        if risk>0:
+            add("SHORT","BREAKOUT",sl,p-1.5*risk)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
     p=prepare(d,tf,sym)
-    return p or normal(d,tf,sym)
+    n=None if (tf=="15m" and p) else normal(d,tf,sym)
+    if p and n:return p if p["score"]>=n["score"] else n
+    return p or n
 
-def load(path,default):
-    try:
-        with open(path,encoding="utf8") as f:return json.load(f)
-    except:return default
-
-def save(path,data):
-    with open(path+".tmp","w",encoding="utf8") as f:
-        json.dump(data,f,ensure_ascii=False)
-    os.replace(path+".tmp",path)
-
-def send(s):
+def send(s,tag="信号"):
     if not WEBHOOK:return False
-
-    title=(
-        "🟡 启动前埋伏" if s["type"]=="PREPARE"
-        else "🟢 突破启动" if s["type"]=="BREAKOUT"
-        else "🔵 趋势信号"
-    )
-
-    status=(
-        "尚未启动，提前埋伏，等待行情启动"
-        if s["type"]=="PREPARE"
-        else "行情已经启动"
-    )
-
-    text="\n".join([
-        f"**🚨 警报**",
-        f"**{title}**",
-        f"**币种**：{s['sym']}",
-        f"**周期**：{CN[s['tf']]}",
-        f"**方向**：{DIR[s['dir']]}",
-        f"**评分**：{s['score']}/100",
-        f"**入场**：{s['entry']:.8g}",
-        f"**止损**：{s['sl']:.8g}",
-        f"**止盈**：{s['tp']:.8g}",
-        f"**盈亏比**：{s['rr']:.2f}",
-        f"**状态**：{status}",
-        f"**时间**：{s['time']}"
-    ])
-
-    data={
-        "msg_type":"interactive",
-        "card":{
-            "header":{
-                "title":{
-                    "tag":"lark_md",
-                    "content":"**宝宝巴士🚌上车就赚**"
-                }
-            },
-            "elements":[
-                {"tag":"div","text":{"tag":"lark_md","content":text}}
-            ]
-        }
-    }
-
-    time.sleep(2+random.random())
-
-    for i in range(4):
-        try:
-            r=requests.post(WEBHOOK,json=data,timeout=12)
-            try:
-                res=r.json()
-            except:
-                res={}
-
-            if r.status_code==200 and res.get("code")==0:
-                print(f"[飞书] 已发送 {s['sym']} {s['tf']} {s['type']}")
-                return True
-            else:
-                print(f"[飞书] 发送被拒! HTTP:{r.status_code} 返回:{r.text}")
-                return False
-        except Exception as e:
-            print(f"[飞书] {type(e).__name__}")
-            time.sleep(min(3*(i+1),15))
-
-    return False
-
-def evaluate(s):
-    d=candles(s["sym"],TF[s["tf"]][0],300)
-    if d is None:return
-
-    unit={"15m":15,"1H":60,"4H":240,"1D":1440}[s["tf"]]
-    bars=int(TF[s["tf"]][3]*60/unit)
-    f=d[d.ts>s["ts"]].iloc[:bars]
-
-    for _,r in f.iterrows():
-        sl=r.l<=s["sl"] if s["dir"]=="LONG" else r.h>=s["sl"]
-        tp=r.h>=s["tp"] if s["dir"]=="LONG" else r.l<=s["tp"]
-        if tp:return "WIN"
-        if sl:return "LOSS"
-
-    return "EXPIRED" if len(f)>=bars else None
-
-def git_save():
-    try:
-        subprocess.run(["git","config","user.name","github-actions"],capture_output=True)
-        subprocess.run([
-            "git","config","user.email",
-            "41898282+github-actions[bot]@users.noreply.github.com"
-        ],capture_output=True)
-        subprocess.run([
-            "git","add","sent_cache.json","signals_record.json"
-        ],capture_output=True)
-
-        x=subprocess.run(["git","diff","--cached","--quiet"],capture_output=True)
-
-        if x.returncode!=0:
-            subprocess.run(["git","commit","-m","auto: update signals"],capture_output=True)
-            subprocess.run(["git","push"],capture_output=True)
-            print("[Git] 已提交并推送")
-    except:
-        pass
-
-def main():
-    global btc_cache
-
-    print("="*40)
-    print(f"[开始] {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M:%S')} 北京时间")
-    print("="*40)
-
-    sent=load("sent_cache.json",{})
-    records=load("signals_record.json",[])
-
-    if isinstance(records,dict):
-        records=list(records.values())
-
-    cut=(datetime.now(timezone.utc)-timedelta(hours=48)).timestamp()
-    sent={k:v for k,v in sent.items() if v>cut}
-
-    syms=coins()
-    if not syms:
-        raise SystemExit("OKX无法获取永续合约")
-
-    print(f"[启动] OKX {len(syms)} 个USDT永续")
-
-    ids={x.get("id") for x in records}
-
-    for tf,(bar,limit,_,_) in TF.items():
-
-        now=datetime.now(timezone.utc)
-
-        run=(
-            tf=="15m" or
-            tf=="1H" and now.minute<15 or
-            tf=="4H" and now.hour%4==0 and 15<=now.minute<30 or
-            tf=="1D" and now.hour==0 and 30<=now.minute<45
+    if s.get("cancel"):
+        txt=(
+            f"宝宝巴士🚌上车就赚\n"
+            f"⚪️ 警报·超时撤销 {CN[s['tf']]} {s['sym']}\n"
+            f"{DIR[s['dir']]} 埋伏 {EXPIRE[s['tf']]}根内未破前高，撤单"
         )
+    else:
+        title=(
+            "🟡 启动前埋伏" if s["type"]=="PREPARE"
+            else "🟢 突破启动" if s["type"]=="BREAKOUT"
+            else "🔵 趋势信号"
+        )
+        if s["type"]=="PREPARE" and s["tf"]=="15m":
+            status=f"快进快出，贴前高埋伏，{s.get('expire',4)}根内不破前高撤单"
+        elif s["type"]=="PREPARE":
+            status=f"启动前埋伏，{s.get('expire',6)}根内不启动就撤"
+        elif s["type"]=="BREAKOUT":
+            status="突破已站稳"
+        else:
+            status="趋势跟随"
+        txt=(
+            f"宝宝巴士🚌上车就赚\n"
+            f"🚨 警报 {title}  {CN[s['tf']]}  {s['sym']}\n"
+            f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
+            f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n"
+            f"{status}\n"
+            f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    try:
+        r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
+        return r.status_code==200
+    except:
+        return False
 
-        if not run:
-            print(f"[{tf}] 未到触发时间，跳过")
+def rank(s):
+    pri={"1H":0,"1D":1,"15m":2}[s["tf"]]
+    return (pri,-s["score"])
+
+def manage_live(st,syms):
+    keep=[]
+    for s in st.get("live") or []:
+        tf=s.get("tf")
+        if tf not in TF:continue
+        d=candles(s["sym"],TF[tf][0],250)
+        if d is None:
+            keep.append(s)
             continue
+        n=bars_since(d,int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1]))
+        p=d.c.iloc[-1]
+        hi=d.h.iloc[d.ts>=int(s.get("sent_ts",d.ts.iloc[-1]))].max() if len(d) else p
+        lo=d.l.iloc[d.ts>=int(s.get("sent_ts",d.ts.iloc[-1]))].min() if len(d) else p
+        sl,tp,side=s["sl"],s["tp"],s["dir"]
+        hit_sl=(lo<=sl) if side=="LONG" else (hi>=sl)
+        hit_tp=(hi>=tp) if side=="LONG" else (lo<=tp)
+        if hit_sl:
+            mark(st,s["sym"],tf,side,d,"cool")
+            print("SL",s["sym"],tf)
+            continue
+        if hit_tp:
+            print("TP",s["sym"],tf)
+            continue
+        if s["type"]=="PREPARE" and n>=s.get("expire",EXPIRE[tf]):
+            broken=(hi>=s.get("hi",tp) if side=="LONG" else lo<=s.get("lo",tp))
+            if not broken:
+                s=dict(s);s["cancel"]=True
+                send(s)
+                mark(st,s["sym"],tf,side,d,"cool")
+                print("EXPIRE",s["sym"],tf)
+                continue
+        keep.append(s)
+    st["live"]=keep
 
-        print(f"[扫描] {tf}")
-        btc_cache={}
-        ns=ne=0
-
-        for sym in syms:
-
-            if stop:
-                print(f"[中断] 触发限流保护，停止扫描 {tf}")
-                break
-
-            d=candles(sym,bar,limit)
+def scan():
+    st=load_state()
+    ss=coins()
+    if not ss:
+        print("no coins")
+        return
+    manage_live(st,ss)
+    hits=[]
+    for tf,(bar,n,_,_) in TF.items():
+        for sym in ss:
+            if stop:break
+            d=candles(sym,bar,n)
             if d is None:continue
-
             s=signal(d,tf,sym)
             if not s:continue
+            if too_soon(st,s["sym"],tf,s["dir"],d,DEDUP_BARS):continue
+            if too_soon(st,s["sym"],tf,s["dir"],d,COOL_BARS) and sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}):
+                if bars_since(d,int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:
+                    continue
+            s["sent_ts"]=int(d.ts.iloc[-1])
+            hits.append(s)
+        if stop:break
 
-            s["ts"]=int(d.ts.iloc[-1])
-            s["time"]=datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    hits.sort(key=rank)
+    picked=hits
 
-            sid=(
-                f"PREPARE|{sym}|{tf}|{s['dir']}|{s['anchor']}"
-                if s["type"]=="PREPARE"
-                else
-                f"{sym}|{tf}|{s['dir']}|{s['type']}|{s['ts']}"
-            )
-
-            ns+=1
-            print(f"→ {sym} {s['dir']} {s['type']} {s['score']}分")
-
-            if sid not in ids:
-                records.append({
-                    "id":sid,**s,
-                    "result":None,
-                    "created":int(time.time())
-                })
-                ids.add(sid)
-
-            if sid not in sent and ne<MAX_SEND and send(s):
-                sent[sid]=int(time.time())
-                ne+=1
-
-        if ns:
-            print(f"[{tf}] 发现 {ns} 个信号，已发送 {ne} 条")
-        else:
-            print(f"[{tf}] 无信号")
-
-        save("sent_cache.json",sent)
-        save("signals_record.json",records)
-
-    print("[评估] 检查历史信号结果...")
-    ev=0
-    for r in records:
-        if not r.get("result"):
-            x=evaluate(r)
-            if x:
-                r["result"]=x
-                r["result_time"]=int(time.time())
-                ev+=1
-                print(f"  ← {r['sym']} {r['tf']} {x}")
-    print(f"[评估] 更新 {ev} 条结果" if ev else "[评估] 无新结果")
-
-    save("sent_cache.json",sent)
-    save("signals_record.json",records)
-    git_save()
-
-    print("="*40)
-    print(f"[完成] {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M:%S')} 北京时间")
-    print(f"[统计] 监控币种 {len(syms)}，历史信号 {len(records)}")
-    print("="*40)
+    for s in picked:
+        if send(s):
+            d=candles(s["sym"],TF[s["tf"]][0],220)
+            if d is not None:mark(st,s["sym"],s["tf"],s["dir"],d,"sent")
+            st.setdefault("live",[]).append({
+                k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","expire","hi","lo","sent_ts") if k in s
+            })
+            print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
+        time.sleep(.2)
+    save_state(st)
+    print(now_bj().strftime("%H:%M:%S"),"hits",len(hits),"sent",len(picked))
 
 if __name__=="__main__":
-    main()
+    scan()
