@@ -174,8 +174,18 @@ def daily_report(st):
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=0
-    for tf,lb in (("15m","15分钟"),("1H","1小时"),("1D","1天")):
-        sub=[r for r in rs if r.get("tf")==tf]
+    combos=[
+        ("15m","PREPARE","15m埋伏"),
+        ("15m","BREAKOUT","15m突破"),
+        ("1H","PREPARE","1H埋伏"),
+        ("1H","TREND","1H趋势"),
+        ("1H","BREAKOUT","1H突破"),
+        ("1D","PREPARE","1D埋伏"),
+        ("1D","TREND","1D趋势"),
+        ("1D","BREAKOUT","1D突破"),
+    ]
+    for tf,typ,lb in combos:
+        sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
         w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
         t=w+l;tw+=w;tl+=l
         L.append(f"警报 {lb}：止盈{w} 止损{l} 胜率{(w/t*100) if t else 0:.0f}%")
@@ -307,36 +317,30 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
-    # 趋势：前高×0.985 与 p+3a 取近的
     if tf!="15m":
         if e20>e60>e120 and p>e200:
             add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+3*a),1.2)
         if e20<e60<e120 and p<e200:
             add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-3*a),1.2)
 
-    # 突破：前高×0.985 与 p+1.5risk 取近的
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
         sl=d.l.iloc[-2]-.3*a;risk=p-sl
         if risk>0:
-            pr=near_res(d,p)
-            base_tp=p+1.5*risk
+            pr=near_res(d,p);base_tp=p+1.5*risk
             if pr is not None:
                 cd=pr*0.985
                 tp=min(cd,base_tp) if cd>p else base_tp
-            else:
-                tp=base_tp
+            else:tp=base_tp
             add("LONG","BREAKOUT",sl,tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
         if risk>0:
-            sp=near_sup(d,p)
-            base_tp=p-1.5*risk
+            sp=near_sup(d,p);base_tp=p-1.5*risk
             if sp is not None:
                 cd=sp*1.015
                 tp=max(cd,base_tp) if cd<p else base_tp
-            else:
-                tp=base_tp
+            else:tp=base_tp
             add("SHORT","BREAKOUT",sl,tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
