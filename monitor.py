@@ -18,8 +18,11 @@ TF={
 DIST={"15m":.01,"1H":.018,"1D":.03}
 DEDUP_BARS=8
 COOL_BARS=12
-MAX_HOLD_BARS=100
+MAX_HOLD={"15m":100,"1H":100,"1D":30}
 KEEP_RESULT_DAYS=7
+KEEP_SENT_DAYS=110
+MAX_SEND_PER_SCAN=20
+MAX_LIVE=200
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -81,7 +84,7 @@ def candles(sym,bar,n=250):
             columns=["ts","o","h","l","c","v","ok"]
         )
         d=d[d.ok=="1"].reset_index(drop=True)
-        if len(d)<210:return
+        if len(d)<10:return
         cache[k]=(time.time(),d)
         return d
     except:
@@ -95,6 +98,16 @@ def atr(d):
     return pd.concat([
         d.h-d.l,(d.h-p).abs(),(d.l-p).abs()
     ],axis=1).max(axis=1).rolling(14).mean()
+
+def nearest_resistance(d,p):
+    h=d.h.iloc[-201:-1]
+    above=h[h>p]
+    return float(above.min()) if len(above)>0 else None
+
+def nearest_support(d,p):
+    l=d.l.iloc[-201:-1]
+    below=l[l<p]
+    return float(below.max()) if len(below)>0 else None
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
@@ -156,14 +169,27 @@ def post_feishu(txt):
     if not WEBHOOK:return False
     try:
         r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
-        return r.status_code==200
-    except:
+        try:
+            res=r.json()
+        except:
+            res={}
+        if r.status_code==200 and res.get("code")==0:
+            return True
+        print(f"[飞书] 发送被拒! HTTP:{r.status_code} 返回:{r.text[:200]}")
         return False
+    except Exception as e:
+        print(f"[飞书] {type(e).__name__}")
+        return False
+
+def clean_state(st):
+    ms_cut=(int(time.time())-KEEP_SENT_DAYS*24*3600)*1000
+    st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=ms_cut}
+    st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=ms_cut}
 
 def daily_report(st):
     n=datetime.now(timezone.utc)
     today=n.strftime("%Y-%m-%d")
-    if n.hour!=0 or n.minute>=15:
+    if n.hour!=0:
         return
     if st.get("last_report")==today:
         return
@@ -189,6 +215,33 @@ def daily_report(st):
         print("DAILY_REPORT",tw,tl,trate)
     keep_cut=int(time.time())-KEEP_RESULT_DAYS*24*3600
     st["results"]=[r for r in st.get("results",[]) if r["ts"]>=keep_cut]
+
+def try_resolve(sym,bar,limit,side,sl,tp,start_ts,end_ts):
+    d1=candles(sym,bar,limit)
+    if d1 is None:return None
+    f=d1[(d1.ts>start_ts)&(d1.ts<=end_ts)]
+    if len(f)==0:return None
+    for _,r in f.iterrows():
+        if side=="LONG":
+            hs=r.l<=sl
+            ht=r.h>=tp
+        else:
+            hs=r.h>=sl
+            ht=r.l<=tp
+        if hs and ht:return "LOSS"
+        if ht:return "WIN"
+        if hs:return "LOSS"
+    return None
+
+def resolve_small(sym,side,sl,tp,start_ts,end_ts,tf):
+    if tf=="1D":
+        r=try_resolve(sym,"5m",300,side,sl,tp,start_ts,end_ts)
+        if r is not None:return r
+        return try_resolve(sym,"1H",300,side,sl,tp,start_ts,end_ts)
+    else:
+        r=try_resolve(sym,"1m",300,side,sl,tp,start_ts,end_ts)
+        if r is not None:return r
+        return try_resolve(sym,"5m",300,side,sl,tp,start_ts,end_ts)
 
 def prepare(d,tf,sym):
     p=d.c.iloc[-1]
@@ -260,19 +313,16 @@ def prepare(d,tf,sym):
             if p-sl<0.8*av:sl=p-0.8*av
             risk=p-sl
             if risk<=0:continue
-            if tf=="15m":
-                tp=p+2.0*risk
-                tag=hi*0.99
-                if tag>p:
-                    r=(tag-p)/risk
-                    if 2.0<=r<=2.5:tp=tag
-            elif tf=="1D":
+            if tf=="1D":
                 sl=min(sl,p-2*av)
                 risk=p-sl
-                tp=p+2*risk
+            pressure=nearest_resistance(d,p)
+            base_tp=p+2.0*risk if tf!="1H" else p+2.2*risk
+            if pressure is not None:
+                cand=pressure*0.985
+                tp=max(cand,base_tp) if cand>p else base_tp
             else:
-                pressure=d.h.iloc[-61:-11].max()
-                tp=min(pressure*.99,p+2.2*risk)
+                tp=base_tp
             rr=(tp-p)/risk
         else:
             structure_sl=float(max(highs))
@@ -280,19 +330,16 @@ def prepare(d,tf,sym):
             if sl-p<0.8*av:sl=p+0.8*av
             risk=sl-p
             if risk<=0:continue
-            if tf=="15m":
-                tp=p-2.0*risk
-                tag=lo*1.01
-                if tag<p:
-                    r=(p-tag)/risk
-                    if 2.0<=r<=2.5:tp=tag
-            elif tf=="1D":
+            if tf=="1D":
                 sl=max(sl,p+2*av)
                 risk=sl-p
-                tp=p-2*risk
+            support=nearest_support(d,p)
+            base_tp=p-2.0*risk if tf!="1H" else p-2.2*risk
+            if support is not None:
+                cand=support*1.015
+                tp=min(cand,base_tp) if cand<p else base_tp
             else:
-                support=d.l.iloc[-61:-11].min()
-                tp=max(support*1.01,p-2.2*risk)
+                tp=base_tp
             rr=(p-tp)/risk
 
         need=75 if tf=="15m" else 75 if tf=="1H" else 72
@@ -387,7 +434,7 @@ def send(s,tag="信号"):
     return post_feishu(txt)
 
 def rank(s):
-    pri={"1H":0,"1D":1,"15m":2}[s["tf"]]
+    pri={"1D":0,"1H":1,"15m":2}[s["tf"]]
     return (pri,-s["score"])
 
 def manage_live(st,syms):
@@ -399,30 +446,51 @@ def manage_live(st,syms):
         if d is None:
             keep.append(s)
             continue
-        n=bars_since(d,int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1]))
-        p=d.c.iloc[-1]
-        hi=d.h.iloc[d.ts>=int(s.get("sent_ts",d.ts.iloc[-1]))].max() if len(d) else p
-        lo=d.l.iloc[d.ts>=int(s.get("sent_ts",d.ts.iloc[-1]))].min() if len(d) else p
+        ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])
+        future=d[d.ts>ts0]
+        if len(future)==0:
+            keep.append(s)
+            continue
+        hi=future.h.max()
+        lo=future.l.min()
         sl,tp,side=s["sl"],s["tp"],s["dir"]
         hit_sl=(lo<=sl) if side=="LONG" else (hi>=sl)
         hit_tp=(hi>=tp) if side=="LONG" else (lo<=tp)
+        if hit_sl and hit_tp:
+            end=int(time.time()*1000)
+            r=resolve_small(s["sym"],side,sl,tp,ts0,end,tf)
+            if r=="WIN":
+                mark(st,s["sym"],tf,side,d,"cool")
+                record_result(st,s,"WIN")
+                print("TPsub",s["sym"],tf)
+            else:
+                mark(st,s["sym"],tf,side,d,"cool")
+                record_result(st,s,"LOSS")
+                print("SLsub",s["sym"],tf)
+            continue
+        if hit_tp:
+            mark(st,s["sym"],tf,side,d,"cool")
+            record_result(st,s,"WIN")
+            print("TP",s["sym"],tf)
+            continue
         if hit_sl:
             mark(st,s["sym"],tf,side,d,"cool")
             record_result(st,s,"LOSS")
             print("SL",s["sym"],tf)
             continue
-        if hit_tp:
-            record_result(st,s,"WIN")
-            print("TP",s["sym"],tf)
-            continue
-        if n>=MAX_HOLD_BARS:
+        n=bars_since(d,ts0)
+        hold=MAX_HOLD.get(tf,100)
+        if n>=hold:
             print("TIMEOUT",s["sym"],tf)
             continue
         keep.append(s)
     st["live"]=keep
+    if len(st["live"])>MAX_LIVE:
+        st["live"]=st["live"][-MAX_LIVE:]
 
 def scan():
     st=load_state()
+    clean_state(st)
     daily_report(st)
     ss=coins()
     if not ss:
@@ -451,7 +519,7 @@ def scan():
         if stop:break
 
     hits.sort(key=rank)
-    picked=hits
+    picked=hits[:MAX_SEND_PER_SCAN]
 
     for s in picked:
         if send(s):
