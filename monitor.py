@@ -394,7 +394,7 @@ def scan():
         cnt=0
         for s in picked:
             if send_signal(st,s):cnt+=1
-            time.sleep(.2)
+            time.sleep(.3)
         save_state(st)
         print(f"[{tf}] hits {len(hits)} sent {cnt}")
 
