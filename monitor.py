@@ -28,6 +28,16 @@ cache={};btc_cache={};stop=False
 def now_bj():
     return datetime.now(BJ_TZ)
 
+def tf_should_run(tf):
+    n=datetime.now(timezone.utc)
+    if tf=="15m":
+        return True
+    if tf=="1H":
+        return n.minute<20
+    if tf=="1D":
+        return n.hour==0 and 10<=n.minute<30
+    return True
+
 def get(path,p):
     global stop
     if stop:return
@@ -387,6 +397,10 @@ def scan():
     manage_live(st,ss)
     hits=[]
     for tf,(bar,n,_,_) in TF.items():
+        if not tf_should_run(tf):
+            print(f"[{tf}] 未到触发时间，跳过")
+            continue
+        print(f"[扫描] {tf}")
         for sym in ss:
             if stop:break
             d=candles(sym,bar,n)
