@@ -4,8 +4,26 @@ from datetime import datetime,timezone,timedelta
 
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
+PROXY=os.getenv("OKX_PROXY","")
 BJ_TZ=timezone(timedelta(hours=8))
 STATE="bus_state.json"
+
+UAS=[
+ "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+ "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+ "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+ "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+ "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+]
+
+def hdr():
+    return {
+        "User-Agent":random.choice(UAS),
+        "Accept":"application/json, text/plain, */*",
+        "Accept-Language":"zh-CN,zh;q=0.9,en;q=0.8",
+        "Connection":"keep-alive",
+        "Referer":"https://www.okx.com/",
+    }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
 DIST={"15m":.01,"1H":.018,"1D":.03}
@@ -18,6 +36,7 @@ DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False
+last_req=[0.0]
 
 def now_bj():return datetime.now(BJ_TZ)
 
@@ -28,23 +47,36 @@ def tf_run(tf):
     if tf=="1D":return n.hour==0 and 10<=n.minute<30
     return True
 
+def throttle():
+    gap=.3+random.random()*.3
+    wait=last_req[0]+gap-time.time()
+    if wait>0:time.sleep(wait)
+    last_req[0]=time.time()
+
 def get(path,p):
     global stop
     if stop:return
     for i in range(5):
         try:
-            time.sleep(.15+random.random()*.15)
-            r=requests.get(BASE+path,params=p,timeout=15)
+            throttle()
+            kw={"params":p,"timeout":20,"headers":hdr()}
+            if PROXY:kw["proxies"]={"http":PROXY,"https":PROXY}
+            r=requests.get(BASE+path,**kw)
             if r.status_code in (403,451):
-                stop=True;print("OKX HTTP",r.status_code);return
+                print(f"[OKX] HTTP {r.status_code} 停止本轮");stop=True;return
+            if r.status_code==418:
+                print("[OKX] 418 被封 等60s");time.sleep(60);continue
             if r.status_code==429 or r.status_code>=500:
-                time.sleep(min(3*2**i,30)+random.random());continue
+                w=min(3*2**i,30)+random.random()*2
+                print(f"[OKX] HTTP {r.status_code} 等{w:.1f}s");time.sleep(w);continue
             x=r.json()
             if x.get("code")=="0":return x.get("data",[])
             if x.get("code")=="50011":
-                time.sleep(min(3*2**i,30)+random.random());continue
+                w=min(3*2**i,30)+random.random()*2
+                print(f"[OKX] 50011 等{w:.1f}s");time.sleep(w);continue
             return
-        except:time.sleep(min(2**i*2,20))
+        except Exception as e:
+            print(f"[OKX] {type(e).__name__}");time.sleep(min(2**i*2,20))
 
 def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
@@ -310,11 +342,12 @@ def scan():
         print(f"[扫描] {tf}")
         for sym in ss:
             if stop:break
-            s=signal(candles(sym,bar,n),tf,sym)
+            dd=candles(sym,bar,n)
+            s=signal(dd,tf,sym)
             if not s:continue
-            if too_soon(st,s["sym"],tf,s["dir"],candles(sym,bar,n),DEDUP_BARS):continue
-            if sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}) and bars_since(candles(sym,bar,n),int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:continue
-            s["sent_ts"]=int(candles(sym,bar,n).ts.iloc[-1])
+            if too_soon(st,s["sym"],tf,s["dir"],dd,DEDUP_BARS):continue
+            if sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}) and bars_since(dd,int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:continue
+            s["sent_ts"]=int(dd.ts.iloc[-1])
             hits.append(s)
         if stop:break
     hits.sort(key=lambda x:({"1D":0,"1H":1,"15m":2}[x["tf"]],-x["score"]))
