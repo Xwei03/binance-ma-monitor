@@ -1,7 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描
-# 只做 15m / 1H / 1D
-# 15m 埋伏=快进快出（贴前高、近止盈）
-# 1H 主力  1D 少量
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (15m/1H/1D)
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -10,36 +7,25 @@ WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 BJ_TZ=timezone(timedelta(hours=8))
 STATE="bus_state.json"
 
-TF={
- "15m":("15m",250,75,4),
- "1H":("1H",250,75,6),
- "1D":("1D",250,72,4)
-}
+TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
 DIST={"15m":.01,"1H":.018,"1D":.03}
-DEDUP_BARS=8
-COOL_BARS=12
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
-KEEP_RESULT_DAYS=7
-KEEP_SENT_DAYS=110
-MAX_SEND_PER_SCAN=20
-MAX_LIVE=200
+DEDUP_BARS,COOL_BARS=8,12
+KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
+MAX_SEND_PER_SCAN,MAX_LIVE=20,200
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False
 
-def now_bj():
-    return datetime.now(BJ_TZ)
+def now_bj():return datetime.now(BJ_TZ)
 
-def tf_should_run(tf):
+def tf_run(tf):
     n=datetime.now(timezone.utc)
-    if tf=="15m":
-        return True
-    if tf=="1H":
-        return n.minute<20
-    if tf=="1D":
-        return n.hour==0 and 10<=n.minute<30
+    if tf=="15m":return True
+    if tf=="1H":return n.minute<20
+    if tf=="1D":return n.hour==0 and 10<=n.minute<30
     return True
 
 def get(path,p):
@@ -50,20 +36,15 @@ def get(path,p):
             time.sleep(.15+random.random()*.15)
             r=requests.get(BASE+path,params=p,timeout=15)
             if r.status_code in (403,451):
-                stop=True
-                print("OKX HTTP",r.status_code)
-                return
+                stop=True;print("OKX HTTP",r.status_code);return
             if r.status_code==429 or r.status_code>=500:
-                time.sleep(min(3*2**i,30)+random.random())
-                continue
+                time.sleep(min(3*2**i,30)+random.random());continue
             x=r.json()
             if x.get("code")=="0":return x.get("data",[])
             if x.get("code")=="50011":
-                time.sleep(min(3*2**i,30)+random.random())
-                continue
+                time.sleep(min(3*2**i,30)+random.random());continue
             return
-        except:
-            time.sleep(min(2**i*2,20))
+        except:time.sleep(min(2**i*2,20))
 
 def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
@@ -79,455 +60,277 @@ def candles(sym,bar,n=250):
     x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
     if not x:return
     try:
-        d=pd.DataFrame(
-            [[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
-            columns=["ts","o","h","l","c","v","ok"]
-        )
+        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
+                       columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<10:return
-        cache[k]=(time.time(),d)
-        return d
-    except:
-        return
+        cache[k]=(time.time(),d);return d
+    except:return
 
-def ema(s,n):
-    return s.ewm(span=n,adjust=False).mean()
+def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
 def atr(d):
     p=d.c.shift()
-    return pd.concat([
-        d.h-d.l,(d.h-p).abs(),(d.l-p).abs()
-    ],axis=1).max(axis=1).rolling(14).mean()
+    return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def nearest_resistance(d,p):
-    h=d.h.iloc[-201:-1]
-    above=h[h>p]
-    return float(above.min()) if len(above)>0 else None
+def near_res(d,p):
+    h=d.h.iloc[-201:-1];a=h[h>p]
+    return float(a.min()) if len(a) else None
 
-def nearest_support(d,p):
-    l=d.l.iloc[-201:-1]
-    below=l[l<p]
-    return float(below.max()) if len(below)>0 else None
+def near_sup(d,p):
+    l=d.l.iloc[-201:-1];b=l[l<p]
+    return float(b.max()) if len(b) else None
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
     d=candles("BTC-USDT-SWAP",bar,220)
-    if d is None:
-        btc_cache[bar]=0
-        return 0
-    p=d.c.iloc[-1]
-    e20=ema(d.c,20).iloc[-1]
-    lo3=d.l.iloc[-3:].min()
-    lo6=d.l.iloc[-6:-3].min()
-    hi3=d.h.iloc[-3:].max()
-    hi6=d.h.iloc[-6:-3].max()
-    if p>e20 and lo3>=lo6: v=15
-    elif p<e20 and hi3<=hi6: v=-15
-    else: v=0
-    btc_cache[bar]=v
-    return v
+    if d is None:btc_cache[bar]=0;return 0
+    p=d.c.iloc[-1];e20=ema(d.c,20).iloc[-1]
+    lo3=d.l.iloc[-3:].min();lo6=d.l.iloc[-6:-3].min()
+    hi3=d.h.iloc[-3:].max();hi6=d.h.iloc[-6:-3].max()
+    v=15 if (p>e20 and lo3>=lo6) else (-15 if (p<e20 and hi3<=hi6) else 0)
+    btc_cache[bar]=v;return v
 
-def bars_since(d,ts):
-    x=d[d.ts>=ts]
-    return max(int(len(x))-1,0)
+def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
 
 def load_state():
     try:
         with open(STATE,encoding="utf8") as f:return json.load(f)
-    except:
-        return {"sent":{},"cool":{},"live":[],"results":[],"last_report":""}
+    except:return {"sent":{},"cool":{},"live":[],"results":[],"last_report":""}
 
 def save_state(st):
-    tmp=STATE+".tmp"
-    with open(tmp,"w",encoding="utf8") as f:
-        json.dump(st,f,ensure_ascii=False)
-    os.replace(tmp,STATE)
+    with open(STATE+".tmp","w",encoding="utf8") as f:json.dump(st,f,ensure_ascii=False)
+    os.replace(STATE+".tmp",STATE)
 
-def sdk(sym,tf,side):
-    return f"{sym}|{tf}|{side}"
+def sdk(sym,tf,side):return f"{sym}|{tf}|{side}"
 
 def too_soon(st,sym,tf,side,d,bars):
-    key=sdk(sym,tf,side)
-    ts=st.get("cool",{}).get(key) or st.get("sent",{}).get(key)
-    if not ts:return False
-    return bars_since(d,int(ts))<bars
+    k=sdk(sym,tf,side);ts=st.get("cool",{}).get(k) or st.get("sent",{}).get(k)
+    return ts and bars_since(d,int(ts))<bars
 
 def mark(st,sym,tf,side,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side)]=int(d.ts.iloc[-1])
 
-def record_result(st,s,result):
-    st.setdefault("results",[]).append({
-        "sym":s["sym"],
-        "tf":s["tf"],
-        "dir":s["dir"],
-        "type":s["type"],
-        "result":result,
-        "ts":int(time.time())
-    })
+def rec(st,s,r):
+    st.setdefault("results",[]).append({"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
+                                        "type":s["type"],"result":r,"ts":int(time.time())})
 
-def post_feishu(txt):
+def post(txt):
     if not WEBHOOK:return False
     try:
         r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
-        try:
-            res=r.json()
-        except:
-            res={}
-        if r.status_code==200 and res.get("code")==0:
-            return True
-        print(f"[飞书] 发送被拒! HTTP:{r.status_code} 返回:{r.text[:200]}")
-        return False
+        try:res=r.json()
+        except:res={}
+        if r.status_code==200 and res.get("code")==0:return True
+        print(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
     except Exception as e:
-        print(f"[飞书] {type(e).__name__}")
-        return False
+        print(f"[飞书] {type(e).__name__}");return False
 
-def clean_state(st):
-    ms_cut=(int(time.time())-KEEP_SENT_DAYS*24*3600)*1000
-    st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=ms_cut}
-    st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=ms_cut}
+def clean(st):
+    c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
+    st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
+    st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=c}
 
 def daily_report(st):
-    n=datetime.now(timezone.utc)
-    today=n.strftime("%Y-%m-%d")
-    if n.hour!=0:
-        return
-    if st.get("last_report")==today:
-        return
-    cut=int(time.time())-24*3600
+    n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
+    if n.hour!=0 or st.get("last_report")==today:return
+    cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
-    lines=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"]
-    tw=tl=0
-    for tf,label in (("15m","15分钟"),("1H","1小时"),("1D","1天")):
+    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=0
+    for tf,lb in (("15m","15分钟"),("1H","1小时"),("1D","1天")):
         sub=[r for r in rs if r.get("tf")==tf]
-        w=sum(1 for r in sub if r["result"]=="WIN")
-        l=sum(1 for r in sub if r["result"]=="LOSS")
-        t=w+l
-        rate=(w/t*100) if t else 0
-        tw+=w;tl+=l
-        lines.append(f"警报 {label}：止盈{w} 止损{l} 胜率{rate:.0f}%")
+        w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
+        t=w+l;tw+=w;tl+=l
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 胜率{(w/t*100) if t else 0:.0f}%")
     tt=tw+tl
-    trate=(tw/tt*100) if tt else 0
-    lines.append(f"警报 合计：止盈{tw} 止损{tl} 胜率{trate:.0f}%")
-    lines.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
-    txt="\n".join(lines)
-    if post_feishu(txt):
-        st["last_report"]=today
-        print("DAILY_REPORT",tw,tl,trate)
-    keep_cut=int(time.time())-KEEP_RESULT_DAYS*24*3600
-    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=keep_cut]
+    L.append(f"警报 合计：止盈{tw} 止损{tl} 胜率{(tw/tt*100) if tt else 0:.0f}%")
+    L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
+    if post("\n".join(L)):
+        st["last_report"]=today;print("DAILY_REPORT",tw,tl)
+    kc=int(time.time())-KEEP_RESULT_DAYS*86400
+    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=kc]
 
-def try_resolve(sym,bar,limit,side,sl,tp,start_ts,end_ts):
-    d1=candles(sym,bar,limit)
-    if d1 is None:return None
-    f=d1[(d1.ts>start_ts)&(d1.ts<=end_ts)]
+def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
+    d=candles(sym,bar,lim)
+    if d is None:return None
+    f=d[(d.ts>ts0)&(d.ts<=ts1)]
     if len(f)==0:return None
     for _,r in f.iterrows():
-        if side=="LONG":
-            hs=r.l<=sl
-            ht=r.h>=tp
-        else:
-            hs=r.h>=sl
-            ht=r.l<=tp
+        if side=="LONG":hs,ht=r.l<=sl,r.h>=tp
+        else:hs,ht=r.h>=sl,r.l<=tp
         if hs and ht:return "LOSS"
         if ht:return "WIN"
         if hs:return "LOSS"
     return None
 
-def resolve_small(sym,side,sl,tp,start_ts,end_ts,tf):
+def resolve(sym,side,sl,tp,ts0,ts1,tf):
     if tf=="1D":
-        r=try_resolve(sym,"5m",300,side,sl,tp,start_ts,end_ts)
-        if r is not None:return r
-        return try_resolve(sym,"1H",300,side,sl,tp,start_ts,end_ts)
-    else:
-        r=try_resolve(sym,"1m",300,side,sl,tp,start_ts,end_ts)
-        if r is not None:return r
-        return try_resolve(sym,"5m",300,side,sl,tp,start_ts,end_ts)
+        r=try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
+        return r if r is not None else try_res(sym,"1H",300,side,sl,tp,ts0,ts1)
+    r=try_res(sym,"1m",300,side,sl,tp,ts0,ts1)
+    return r if r is not None else try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
 
-def prepare(d,tf,sym):
+def signal(d,tf,sym):
+    if d is None or len(d)<210:return
     p=d.c.iloc[-1]
-    a=atr(d)
-    av=a.iloc[-1]
-    base=a.iloc[-21:-1].mean()
+    a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
     if pd.isna(av) or pd.isna(base):return
-
-    e20=ema(d.c,20)
-    e60=ema(d.c,60)
-    hi=d.h.iloc[-11:-1].max()
-    lo=d.l.iloc[-11:-1].min()
+    e20=ema(d.c,20);e60=ema(d.c,60)
+    hi=d.h.iloc[-11:-1].max();lo=d.l.iloc[-11:-1].min()
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     vr3=d.v.iloc[-3:].mean()/max(d.v.iloc[-13:-3].mean(),1e-12)
     ar=av/base
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],av*.01)
     bs=btc(TF[tf][0])
-    lows=d.l.iloc[-6:-1].values
-    highs=d.h.iloc[-6:-1].values
+    lows=d.l.iloc[-6:-1].values;highs=d.h.iloc[-6:-1].values
     out=[]
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         cap=.008 if tf=="15m" else DIST[tf]
         if dist<=0 or dist>cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:
-            continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:continue
         if tf=="15m":
-            if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):
-                continue
+            if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
         else:
-            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):
-                continue
-        if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
-        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
-        if side=="LONG" and p<e20.iloc[-1]:continue
-        if side=="SHORT" and p>e20.iloc[-1]:continue
-
-        struct=(
-            lows[-1]>=lows[0] and lows[-1]>=lows[-2]
-            if side=="LONG" else
-            highs[-1]<=highs[0] and highs[-1]<=highs[-2]
-        )
-        if not struct:continue
-
-        trend=(
-            e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]
-            if side=="LONG" else
-            e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4]
-        )
-
-        score=0
-        score+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
-        if tf=="15m":
-            score+=16 if dist<=.003 else 12 if dist<=.005 else 0
-        else:
-            score+=16 if dist<=.0075 else 10 if dist<=.012 else 5 if dist<=.018 else 2
-        score+=15
-        score+=14 if trend else 8
-        score+=14 if .7<=vr<1.5 and vr3>=1.05 else 8 if .6<=vr<1.5 and vr3>=1 else 0
-        score+=8 if (bs>0 if side=="LONG" else bs<0) else 4 if bs==0 else 0
-        score+=5 if body<.35 and ar<=1 else 3 if body<.45 else 0
-        if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:score-=10
-        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:score-=10
+            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
+        if side=="LONG" and (e20.iloc[-1]<=e60.iloc[-1] or p<e20.iloc[-1]):continue
+        if side=="SHORT" and (e20.iloc[-1]>=e60.iloc[-1] or p>e20.iloc[-1]):continue
+        st_=(lows[-1]>=lows[0] and lows[-1]>=lows[-2]) if side=="LONG" else (highs[-1]<=highs[0] and highs[-1]<=highs[-2])
+        if not st_:continue
+        trend=(e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]) if side=="LONG" else (e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4])
+        s=0
+        s+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
+        if tf=="15m":s+=16 if dist<=.003 else 12 if dist<=.005 else 0
+        else:s+=16 if dist<=.0075 else 10 if dist<=.012 else 5 if dist<=.018 else 2
+        s+=15
+        s+=14 if trend else 8
+        s+=14 if (.7<=vr<1.5 and vr3>=1.05) else 8 if (.6<=vr<1.5 and vr3>=1) else 0
+        s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
+        s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
+        if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
+        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
 
         if side=="LONG":
-            structure_sl=float(min(lows))
-            sl=structure_sl-1.0*av
+            stsl=float(min(lows));sl=stsl-1.0*av
             if p-sl<0.8*av:sl=p-0.8*av
             risk=p-sl
             if risk<=0:continue
             if tf=="1D":
-                sl=min(sl,p-2*av)
-                risk=p-sl
-            pressure=nearest_resistance(d,p)
-            base_tp=p+2.0*risk if tf!="1H" else p+2.2*risk
-            if pressure is not None:
-                cand=pressure*0.985
-                tp=max(cand,base_tp) if cand>p else base_tp
-            else:
-                tp=base_tp
+                sl=min(sl,p-2*av);risk=p-sl
+            pr=near_res(d,p);bt=p+2.0*risk if tf!="1H" else p+2.2*risk
+            if pr is not None:
+                cd=pr*0.985;tp=max(cd,bt) if cd>p else bt
+            else:tp=bt
             rr=(tp-p)/risk
         else:
-            structure_sl=float(max(highs))
-            sl=structure_sl+1.0*av
+            stsl=float(max(highs));sl=stsl+1.0*av
             if sl-p<0.8*av:sl=p+0.8*av
             risk=sl-p
             if risk<=0:continue
             if tf=="1D":
-                sl=max(sl,p+2*av)
-                risk=sl-p
-            support=nearest_support(d,p)
-            base_tp=p-2.0*risk if tf!="1H" else p-2.2*risk
-            if support is not None:
-                cand=support*1.015
-                tp=min(cand,base_tp) if cand<p else base_tp
-            else:
-                tp=base_tp
+                sl=max(sl,p+2*av);risk=sl-p
+            sp=near_sup(d,p);bt=p-2.0*risk if tf!="1H" else p-2.2*risk
+            if sp is not None:
+                cd=sp*1.015;tp=min(cd,bt) if cd<p else bt
+            else:tp=bt
             rr=(p-tp)/risk
 
-        need=75 if tf=="15m" else 75 if tf=="1H" else 72
-        need_rr=2.0
-        if score>=need and rr>=need_rr:
-            out.append({
-                "sym":sym,"tf":tf,"dir":side,"type":"PREPARE",
-                "score":int(score),"entry":p,"sl":sl,"tp":tp,"rr":rr,
-                "anchor":int(d.ts.iloc[-11]),
-                "hi":float(hi),"lo":float(lo)
-            })
+        need=75 if tf in ("15m","1H") else 72
+        if s>=need and rr>=2.0:
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
+                        "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
+                        "hi":float(hi),"lo":float(lo)})
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym):
+    if d is None or len(d)<210:return
     p=d.c.iloc[-1]
-    e20,e60,e120,e200=[ema(d.c,n).iloc[-1] for n in (20,60,120,200)]
-    a=atr(d).iloc[-1]
-    aa=atr(d).iloc[-6:-1].mean()
+    E=[ema(d.c,n).iloc[-1] for n in (20,60,120,200)]
+    e20,e60,e120,e200=E
+    a=atr(d).iloc[-1];aa=atr(d).iloc[-6:-1].mean()
+    if pd.isna(a) or pd.isna(aa):return
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
-    bs=btc(TF[tf][0])
-    if pd.isna(a) or pd.isna(aa):return
-    out=[]
+    bs=btc(TF[tf][0]);out=[]
 
     def add(side,typ,sl,tp):
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
-        s=(
-            30 if vr>=2 else 15 if vr>=1.5 else 0
-        )+(
-            25 if body>=.6 else 12 if body>=.45 else 0
-        )+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
+        s=(30 if vr>=2 else 15 if vr>=1.5 else 0)+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
         if side=="LONG" and p>e20:s+=10
         if side=="SHORT" and p<e20:s+=10
-        need=TF[tf][2]
-        need_rr=2.0
-        if rr>=need_rr and s>=need:
-            out.append({
-                "sym":sym,"tf":tf,"dir":side,"type":typ,
-                "score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr
-            })
+        if rr>=2.0 and s>=TF[tf][2]:
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
+                        "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60>e120 and p>e200:
-            add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
-        if e20<e60<e120 and p<e200:
-            add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
-
-    hi=d.h.iloc[-12:-2].max()
-    lo=d.l.iloc[-12:-2].min()
+        if e20>e60>e120 and p>e200:add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
+        if e20<e60<e120 and p<e200:add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
+    hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
-        sl=d.l.iloc[-2]-.3*a
-        risk=p-sl
-        if risk>0:
-            add("LONG","BREAKOUT",sl,p+1.5*risk)
+        sl=d.l.iloc[-2]-.3*a;risk=p-sl
+        if risk>0:add("LONG","BREAKOUT",sl,p+1.5*risk)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
-        sl=d.h.iloc[-2]+.3*a
-        risk=sl-p
-        if risk>0:
-            add("SHORT","BREAKOUT",sl,p-1.5*risk)
+        sl=d.h.iloc[-2]+.3*a;risk=sl-p
+        if risk>0:add("SHORT","BREAKOUT",sl,p-1.5*risk)
     return max(out,key=lambda x:x["score"]) if out else None
 
-def signal(d,tf,sym):
-    p=prepare(d,tf,sym)
-    n=None if (tf=="15m" and p) else normal(d,tf,sym)
-    if p and n:return p if p["score"]>=n["score"] else n
-    return p or n
-
-def send(s,tag="信号"):
-    title=(
-        "🟡 启动前埋伏" if s["type"]=="PREPARE"
-        else "🟢 突破启动" if s["type"]=="BREAKOUT"
-        else "🔵 趋势信号"
-    )
-    if s["type"]=="PREPARE" and s["tf"]=="15m":
-        status="贴前高埋伏，等待突破"
-    elif s["type"]=="PREPARE":
-        status="启动前埋伏，等待启动"
-    elif s["type"]=="BREAKOUT":
-        status="突破已站稳"
-    else:
-        status="趋势跟随"
-    txt=(
-        f"宝宝巴士🚌上车就赚\n"
-        f"🚨 警报 {title}  {CN[s['tf']]}  {s['sym']}\n"
-        f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
-        f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n"
-        f"{status}\n"
-        f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    return post_feishu(txt)
-
-def rank(s):
-    pri={"1D":0,"1H":1,"15m":2}[s["tf"]]
-    return (pri,-s["score"])
-
-def manage_live(st,syms):
+def scan():
+    st=load_state();clean(st);daily_report(st)
+    ss=coins()
+    if not ss:print("no coins");save_state(st);return
     keep=[]
     for s in st.get("live") or []:
         tf=s.get("tf")
         if tf not in TF:continue
         d=candles(s["sym"],TF[tf][0],250)
-        if d is None:
-            keep.append(s)
-            continue
+        if d is None:keep.append(s);continue
         ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])
-        future=d[d.ts>ts0]
-        if len(future)==0:
-            keep.append(s)
-            continue
-        hi=future.h.max()
-        lo=future.l.min()
+        f=d[d.ts>ts0]
+        if len(f)==0:keep.append(s);continue
+        hi=f.h.max();lo=f.l.min()
         sl,tp,side=s["sl"],s["tp"],s["dir"]
-        hit_sl=(lo<=sl) if side=="LONG" else (hi>=sl)
-        hit_tp=(hi>=tp) if side=="LONG" else (lo<=tp)
-        if hit_sl and hit_tp:
-            end=int(time.time()*1000)
-            r=resolve_small(s["sym"],side,sl,tp,ts0,end,tf)
-            if r=="WIN":
-                mark(st,s["sym"],tf,side,d,"cool")
-                record_result(st,s,"WIN")
-                print("TPsub",s["sym"],tf)
-            else:
-                mark(st,s["sym"],tf,side,d,"cool")
-                record_result(st,s,"LOSS")
-                print("SLsub",s["sym"],tf)
-            continue
-        if hit_tp:
-            mark(st,s["sym"],tf,side,d,"cool")
-            record_result(st,s,"WIN")
-            print("TP",s["sym"],tf)
-            continue
-        if hit_sl:
-            mark(st,s["sym"],tf,side,d,"cool")
-            record_result(st,s,"LOSS")
-            print("SL",s["sym"],tf)
-            continue
-        n=bars_since(d,ts0)
-        hold=MAX_HOLD.get(tf,100)
-        if n>=hold:
-            print("TIMEOUT",s["sym"],tf)
-            continue
+        hs=(lo<=sl) if side=="LONG" else (hi>=sl)
+        ht=(hi>=tp) if side=="LONG" else (lo<=tp)
+        if hs and ht:
+            r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
+            mark(st,s["sym"],tf,side,d,"cool");rec(st,s,r if r=="WIN" else "LOSS")
+            print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf);continue
+        if ht:mark(st,s["sym"],tf,side,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
+        if hs:mark(st,s["sym"],tf,side,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
+        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):print("TIMEOUT",s["sym"],tf);continue
         keep.append(s)
-    st["live"]=keep
-    if len(st["live"])>MAX_LIVE:
-        st["live"]=st["live"][-MAX_LIVE:]
+    st["live"]=keep[-MAX_LIVE:]
 
-def scan():
-    st=load_state()
-    clean_state(st)
-    daily_report(st)
-    ss=coins()
-    if not ss:
-        print("no coins")
-        save_state(st)
-        return
-    manage_live(st,ss)
     hits=[]
     for tf,(bar,n,_,_) in TF.items():
-        if not tf_should_run(tf):
-            print(f"[{tf}] 未到触发时间，跳过")
-            continue
+        if not tf_run(tf):print(f"[{tf}] 跳过");continue
         print(f"[扫描] {tf}")
         for sym in ss:
             if stop:break
-            d=candles(sym,bar,n)
-            if d is None:continue
-            s=signal(d,tf,sym)
+            s=signal(candles(sym,bar,n),tf,sym)
             if not s:continue
-            if too_soon(st,s["sym"],tf,s["dir"],d,DEDUP_BARS):continue
-            if too_soon(st,s["sym"],tf,s["dir"],d,COOL_BARS) and sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}):
-                if bars_since(d,int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:
-                    continue
-            s["sent_ts"]=int(d.ts.iloc[-1])
+            if too_soon(st,s["sym"],tf,s["dir"],candles(sym,bar,n),DEDUP_BARS):continue
+            if sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}) and bars_since(candles(sym,bar,n),int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:continue
+            s["sent_ts"]=int(candles(sym,bar,n).ts.iloc[-1])
             hits.append(s)
         if stop:break
-
-    hits.sort(key=rank)
+    hits.sort(key=lambda x:({"1D":0,"1H":1,"15m":2}[x["tf"]],-x["score"]))
     picked=hits[:MAX_SEND_PER_SCAN]
 
     for s in picked:
-        if send(s):
+        t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
+        stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="15m") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
+        txt=(f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
+             f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
+             f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
+             f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
+        if post(txt):
             d=candles(s["sym"],TF[s["tf"]][0],220)
             if d is not None:mark(st,s["sym"],s["tf"],s["dir"],d,"sent")
-            st.setdefault("live",[]).append({
-                k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s
-            })
+            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
             print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
         time.sleep(.2)
     save_state(st)
