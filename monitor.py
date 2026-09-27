@@ -11,9 +11,9 @@ BJ_TZ=timezone(timedelta(hours=8))
 STATE="bus_state.json"
 
 TF={
- "15m":("15m",250,85,4),
- "1H":("1H",250,80,6),
- "1D":("1D",250,78,4)
+ "15m":("15m",250,75,4),
+ "1H":("1H",250,75,6),
+ "1D":("1D",250,72,4)
 }
 DIST={"15m":.01,"1H":.018,"1D":.03}
 DEDUP_BARS=8
@@ -246,7 +246,7 @@ def prepare(d,tf,sym):
                 tp=max(support*1.01,p-2.2*risk)
             rr=(p-tp)/risk
 
-        need=85 if tf=="15m" else 80 if tf=="1H" else 78
+        need=75 if tf=="15m" else 75 if tf=="1H" else 72
         need_rr=2.0
         if score>=need and rr>=need_rr:
             out.append({
