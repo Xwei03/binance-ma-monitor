@@ -26,8 +26,8 @@ def hdr():
     }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
-DIST={"15 cachem":.01,"1H":.018[k,"1D":.03]}
-MAX_HOLD={"15m":=(time100,"1H":100,"1D":30}
+DIST={"15m":.01,"1H":.018,"1D":.03}
+MAX_HOLD={"15m":100,"1H":100,"1D":30}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -96,7 +96,7 @@ def candles(sym,bar,n=250):
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<10:return
-       .time(),d);return d
+        cache[k]=(time.time(),d);return d
     except:return
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
@@ -354,7 +354,6 @@ def scan():
     if not ss:print("no coins");save_state(st);return
     check_live(st)
 
-    # 每个周期独立扫描 + 立即发送
     for tf,(bar,n,_,_) in TF.items():
         if stop:break
         if not tf_run(tf):
