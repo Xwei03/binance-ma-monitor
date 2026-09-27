@@ -213,7 +213,7 @@ def prepare(d,tf,sym):
             if risk<=0:continue
             if tf=="15m":
                 tp=p+1.8*risk
-                tag=hi*1.002
+                tag=hi*0.99
                 if tag>p:
                     r=(tag-p)/risk
                     if 1.5<=r<=2.0:tp=tag
@@ -233,7 +233,7 @@ def prepare(d,tf,sym):
             if risk<=0:continue
             if tf=="15m":
                 tp=p-1.8*risk
-                tag=lo*.998
+                tag=lo*1.01
                 if tag<p:
                     r=(p-tag)/risk
                     if 1.5<=r<=2.0:tp=tag
