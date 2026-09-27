@@ -163,7 +163,7 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        cap=.005 if tf=="15m" else DIST[tf]
+        cap=.01 if tf=="15m" else DIST[tf]
         if dist<=0 or dist>cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:
             continue
@@ -380,8 +380,6 @@ def manage_live(st,syms):
         if s["type"]=="PREPARE" and n>=s.get("expire",EXPIRE[tf]):
             broken=(hi>=s.get("hi",tp) if side=="LONG" else lo<=s.get("lo",tp))
             if not broken:
-                s=dict(s);s["cancel"]=True
-                send(s)
                 mark(st,s["sym"],tf,side,d,"cool")
                 print("EXPIRE",s["sym"],tf)
                 continue
