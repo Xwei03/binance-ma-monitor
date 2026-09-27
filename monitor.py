@@ -19,6 +19,7 @@ DIST={"15m":.01,"1H":.018,"1D":.03}
 DEDUP_BARS=8
 COOL_BARS=12
 MAX_HOLD_BARS=100
+KEEP_RESULT_DAYS=7
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -121,7 +122,7 @@ def load_state():
     try:
         with open(STATE,encoding="utf8") as f:return json.load(f)
     except:
-        return {"sent":{},"cool":{},"live":[]}
+        return {"sent":{},"cool":{},"live":[],"results":[],"last_report":""}
 
 def save_state(st):
     tmp=STATE+".tmp"
@@ -140,6 +141,51 @@ def too_soon(st,sym,tf,side,d,bars):
 
 def mark(st,sym,tf,side,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side)]=int(d.ts.iloc[-1])
+
+def record_result(st,s,result):
+    st.setdefault("results",[]).append({
+        "sym":s["sym"],
+        "tf":s["tf"],
+        "dir":s["dir"],
+        "type":s["type"],
+        "result":result,
+        "ts":int(time.time())
+    })
+
+def post_feishu(txt):
+    if not WEBHOOK:return False
+    try:
+        r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
+        return r.status_code==200
+    except:
+        return False
+
+def daily_report(st):
+    n=datetime.now(timezone.utc)
+    today=n.strftime("%Y-%m-%d")
+    if n.hour!=0 or n.minute>=15:
+        return
+    if st.get("last_report")==today:
+        return
+    cut=int(time.time())-24*3600
+    rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
+    win=sum(1 for r in rs if r["result"]=="WIN")
+    loss=sum(1 for r in rs if r["result"]=="LOSS")
+    total=win+loss
+    rate=(win/total*100) if total else 0
+    txt=(
+        f"宝宝巴士🚌上车就赚\n"
+        f"📊 每日统计（警报）\n"
+        f"警报 止盈：{win} 单\n"
+        f"警报 止损：{loss} 单\n"
+        f"警报 胜率：{rate:.1f}%\n"
+        f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    if post_feishu(txt):
+        st["last_report"]=today
+        print("DAILY_REPORT",win,loss,rate)
+    keep_cut=int(time.time())-KEEP_RESULT_DAYS*24*3600
+    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=keep_cut]
 
 def prepare(d,tf,sym):
     p=d.c.iloc[-1]
@@ -314,7 +360,6 @@ def signal(d,tf,sym):
     return p or n
 
 def send(s,tag="信号"):
-    if not WEBHOOK:return False
     title=(
         "🟡 启动前埋伏" if s["type"]=="PREPARE"
         else "🟢 突破启动" if s["type"]=="BREAKOUT"
@@ -336,11 +381,7 @@ def send(s,tag="信号"):
         f"{status}\n"
         f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
     )
-    try:
-        r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
-        return r.status_code==200
-    except:
-        return False
+    return post_feishu(txt)
 
 def rank(s):
     pri={"1H":0,"1D":1,"15m":2}[s["tf"]]
@@ -364,9 +405,11 @@ def manage_live(st,syms):
         hit_tp=(hi>=tp) if side=="LONG" else (lo<=tp)
         if hit_sl:
             mark(st,s["sym"],tf,side,d,"cool")
+            record_result(st,s,"LOSS")
             print("SL",s["sym"],tf)
             continue
         if hit_tp:
+            record_result(st,s,"WIN")
             print("TP",s["sym"],tf)
             continue
         if n>=MAX_HOLD_BARS:
@@ -377,9 +420,11 @@ def manage_live(st,syms):
 
 def scan():
     st=load_state()
+    daily_report(st)
     ss=coins()
     if not ss:
         print("no coins")
+        save_state(st)
         return
     manage_live(st,ss)
     hits=[]
