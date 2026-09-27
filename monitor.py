@@ -28,12 +28,19 @@ def hdr():
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
 DIST={"15m":.01,"1H":.018,"1D":.03}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
+TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
+
+# 锚定美元的稳定币，基础币种不监控（黄金类保留）
+STABLES={"USDT","USDC","BUSD","TUSD","PYUSD","FDUSD","DAI","USDS","USDE","USDD",
+         "RLUSD","USD1","FRAX","LUSD","GUSD","USDP","SUSD","MIM","UST","USTC",
+         "HUSD","USDN","USDX","USDJ","CUSD","VAI","DOLA","ALUSD","USDR","USDY",
+         "USDF","USDA","USDG","XUSD"}
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
@@ -82,7 +89,9 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
+    live={x["instId"] for x in a
+          if x.get("settleCcy")=="USDT" and x.get("state")=="live"
+          and x["instId"].split("-")[0].upper() not in STABLES}
     vol={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
     return sorted(live,key=lambda x:vol.get(x,0),reverse=True)[:150]
 
@@ -149,14 +158,18 @@ def rec(st,s,r):
 
 def post(txt):
     if not WEBHOOK:return False
-    try:
-        r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
-        try:res=r.json()
-        except:res={}
-        if r.status_code==200 and res.get("code")==0:return True
-        print(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
-    except Exception as e:
-        print(f"[飞书] {type(e).__name__}");return False
+    for i in range(3):
+        try:
+            r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
+            try:res=r.json()
+            except:res={}
+            if r.status_code==200 and res.get("code")==0:return True
+            if r.status_code==429:
+                print(f"[飞书] 限流 重试{i+1}/3");time.sleep(min(5*2**i,30));continue
+            print(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
+        except Exception as e:
+            print(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
+    return False
 
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
@@ -202,7 +215,7 @@ def resolve(sym,side,sl,tp,ts0,ts1,tf):
     r=try_res(sym,"1m",300,side,sl,tp,ts0,ts1)
     return r if r is not None else try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
 
-def signal(d,tf,sym):
+def prepare(d,tf,sym):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
     a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
@@ -250,10 +263,12 @@ def signal(d,tf,sym):
             if risk<=0:continue
             if tf=="1D":
                 sl=min(sl,p-2*av);risk=p-sl
-            pr=near_res(d,p);bt=p+2.0*risk if tf!="1H" else p+2.2*risk
+            pr=near_res(d,p)
             if pr is not None:
-                cd=pr*0.985;tp=max(cd,bt) if cd>p else bt
-            else:tp=bt
+                cd=pr*0.985
+                tp=cd if cd>p else p+2.0*risk
+            else:
+                tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
             stsl=float(max(highs));sl=stsl+1.0*av
@@ -262,10 +277,12 @@ def signal(d,tf,sym):
             if risk<=0:continue
             if tf=="1D":
                 sl=max(sl,p+2*av);risk=sl-p
-            sp=near_sup(d,p);bt=p-2.0*risk if tf!="1H" else p-2.2*risk
+            sp=near_sup(d,p)
             if sp is not None:
-                cd=sp*1.015;tp=min(cd,bt) if cd<p else bt
-            else:tp=bt
+                cd=sp*1.015
+                tp=cd if cd<p else p-2.0*risk
+            else:
+                tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
         need=75 if tf in ("15m","1H") else 72
@@ -285,29 +302,39 @@ def normal(d,tf,sym):
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
     bs=btc(TF[tf][0]);out=[]
+    sl_mult=TREND_SL.get(tf,2.0)
 
-    def add(side,typ,sl,tp):
+    def add(side,typ,sl,tp,need_rr):
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
         s=(30 if vr>=2 else 15 if vr>=1.5 else 0)+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
         if side=="LONG" and p>e20:s+=10
         if side=="SHORT" and p<e20:s+=10
-        if rr>=2.0 and s>=TF[tf][2]:
+        if rr>=need_rr and s>=TF[tf][2]:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60>e120 and p>e200:add("LONG","TREND",p-2.5*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a))
-        if e20<e60<e120 and p<e200:add("SHORT","TREND",p+2.5*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a))
+        if e20>e60>e120 and p>e200:
+            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*.99,p+3*a),1.2)
+        if e20<e60<e120 and p<e200:
+            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.01,p-3*a),1.2)
+
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
         sl=d.l.iloc[-2]-.3*a;risk=p-sl
-        if risk>0:add("LONG","BREAKOUT",sl,p+1.5*risk)
+        if risk>0:add("LONG","BREAKOUT",sl,p+1.5*risk,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
-        if risk>0:add("SHORT","BREAKOUT",sl,p-1.5*risk)
+        if risk>0:add("SHORT","BREAKOUT",sl,p-1.5*risk,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
+
+def signal(d,tf,sym):
+    p=prepare(d,tf,sym)
+    n=normal(d,tf,sym)
+    if p and n:return p if p["score"]>=n["score"] else n
+    return p or n
 
 def send_signal(st,s):
     t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
