@@ -1,6 +1,6 @@
 # 宝宝巴士🚌上车就赚 - OKX 信号扫描
 # 只做 15m / 1H / 1D
-# 15m 埋伏=快进快出（贴前高、近止盈、4根不破就撤）
+# 15m 埋伏=快进快出（贴前高、近止盈）
 # 1H 主力  1D 少量
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
@@ -16,9 +16,9 @@ TF={
  "1D":("1D",250,78,4)
 }
 DIST={"15m":.01,"1H":.018,"1D":.03}
-EXPIRE={"15m":4,"1H":6,"1D":4}
 DEDUP_BARS=8
 COOL_BARS=12
+MAX_HOLD_BARS=100
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -163,7 +163,7 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        cap=.01 if tf=="15m" else DIST[tf]
+        cap=.008 if tf=="15m" else DIST[tf]
         if dist<=0 or dist>cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:
             continue
@@ -212,11 +212,11 @@ def prepare(d,tf,sym):
             risk=p-sl
             if risk<=0:continue
             if tf=="15m":
-                tp=p+1.8*risk
+                tp=p+2.0*risk
                 tag=hi*0.99
                 if tag>p:
                     r=(tag-p)/risk
-                    if 1.5<=r<=2.0:tp=tag
+                    if 2.0<=r<=2.5:tp=tag
             elif tf=="1D":
                 sl=min(sl,p-2*av)
                 risk=p-sl
@@ -232,11 +232,11 @@ def prepare(d,tf,sym):
             risk=sl-p
             if risk<=0:continue
             if tf=="15m":
-                tp=p-1.8*risk
+                tp=p-2.0*risk
                 tag=lo*1.01
                 if tag<p:
                     r=(p-tag)/risk
-                    if 1.5<=r<=2.0:tp=tag
+                    if 2.0<=r<=2.5:tp=tag
             elif tf=="1D":
                 sl=max(sl,p+2*av)
                 risk=sl-p
@@ -247,13 +247,13 @@ def prepare(d,tf,sym):
             rr=(p-tp)/risk
 
         need=85 if tf=="15m" else 80 if tf=="1H" else 78
-        need_rr=1.8
+        need_rr=2.0
         if score>=need and rr>=need_rr:
             out.append({
                 "sym":sym,"tf":tf,"dir":side,"type":"PREPARE",
                 "score":int(score),"entry":p,"sl":sl,"tp":tp,"rr":rr,
                 "anchor":int(d.ts.iloc[-11]),
-                "expire":EXPIRE[tf],"hi":float(hi),"lo":float(lo)
+                "hi":float(hi),"lo":float(lo)
             })
     return max(out,key=lambda x:x["score"]) if out else None
 
@@ -280,12 +280,11 @@ def normal(d,tf,sym):
         if side=="LONG" and p>e20:s+=10
         if side=="SHORT" and p<e20:s+=10
         need=TF[tf][2]
-        need_rr=1.8
+        need_rr=2.0
         if rr>=need_rr and s>=need:
             out.append({
                 "sym":sym,"tf":tf,"dir":side,"type":typ,
-                "score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,
-                "expire":EXPIRE[tf]
+                "score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr
             })
 
     if tf!="15m":
@@ -316,34 +315,27 @@ def signal(d,tf,sym):
 
 def send(s,tag="信号"):
     if not WEBHOOK:return False
-    if s.get("cancel"):
-        txt=(
-            f"宝宝巴士🚌上车就赚\n"
-            f"⚪️ 警报·超时撤销 {CN[s['tf']]} {s['sym']}\n"
-            f"{DIR[s['dir']]} 埋伏 {EXPIRE[s['tf']]}根内未破前高，撤单"
-        )
+    title=(
+        "🟡 启动前埋伏" if s["type"]=="PREPARE"
+        else "🟢 突破启动" if s["type"]=="BREAKOUT"
+        else "🔵 趋势信号"
+    )
+    if s["type"]=="PREPARE" and s["tf"]=="15m":
+        status="贴前高埋伏，等待突破"
+    elif s["type"]=="PREPARE":
+        status="启动前埋伏，等待启动"
+    elif s["type"]=="BREAKOUT":
+        status="突破已站稳"
     else:
-        title=(
-            "🟡 启动前埋伏" if s["type"]=="PREPARE"
-            else "🟢 突破启动" if s["type"]=="BREAKOUT"
-            else "🔵 趋势信号"
-        )
-        if s["type"]=="PREPARE" and s["tf"]=="15m":
-            status=f"快进快出，贴前高埋伏，{s.get('expire',4)}根内不破前高撤单"
-        elif s["type"]=="PREPARE":
-            status=f"启动前埋伏，{s.get('expire',6)}根内不启动就撤"
-        elif s["type"]=="BREAKOUT":
-            status="突破已站稳"
-        else:
-            status="趋势跟随"
-        txt=(
-            f"宝宝巴士🚌上车就赚\n"
-            f"🚨 警报 {title}  {CN[s['tf']]}  {s['sym']}\n"
-            f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
-            f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n"
-            f"{status}\n"
-            f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        status="趋势跟随"
+    txt=(
+        f"宝宝巴士🚌上车就赚\n"
+        f"🚨 警报 {title}  {CN[s['tf']]}  {s['sym']}\n"
+        f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
+        f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n"
+        f"{status}\n"
+        f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
     try:
         r=requests.post(WEBHOOK,json={"msg_type":"text","content":{"text":txt}},timeout=15)
         return r.status_code==200
@@ -377,12 +369,9 @@ def manage_live(st,syms):
         if hit_tp:
             print("TP",s["sym"],tf)
             continue
-        if s["type"]=="PREPARE" and n>=s.get("expire",EXPIRE[tf]):
-            broken=(hi>=s.get("hi",tp) if side=="LONG" else lo<=s.get("lo",tp))
-            if not broken:
-                mark(st,s["sym"],tf,side,d,"cool")
-                print("EXPIRE",s["sym"],tf)
-                continue
+        if n>=MAX_HOLD_BARS:
+            print("TIMEOUT",s["sym"],tf)
+            continue
         keep.append(s)
     st["live"]=keep
 
@@ -421,7 +410,7 @@ def scan():
             d=candles(s["sym"],TF[s["tf"]][0],220)
             if d is not None:mark(st,s["sym"],s["tf"],s["dir"],d,"sent")
             st.setdefault("live",[]).append({
-                k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","expire","hi","lo","sent_ts") if k in s
+                k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s
             })
             print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
         time.sleep(.2)
