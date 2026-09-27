@@ -36,12 +36,6 @@ CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
-# 锚定美元的稳定币，基础币种不监控（黄金类保留）
-STABLES={"USDT","USDC","BUSD","TUSD","PYUSD","FDUSD","DAI","USDS","USDE","USDD",
-         "RLUSD","USD1","FRAX","LUSD","GUSD","USDP","SUSD","MIM","UST","USTC",
-         "HUSD","USDN","USDX","USDJ","CUSD","VAI","DOLA","ALUSD","USDR","USDY",
-         "USDF","USDA","USDG","XUSD"}
-
 cache={};btc_cache={};stop=False
 last_req=[0.0]
 
@@ -89,9 +83,7 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    live={x["instId"] for x in a
-          if x.get("settleCcy")=="USDT" and x.get("state")=="live"
-          and x["instId"].split("-")[0].upper() not in STABLES}
+    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
     vol={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
     return sorted(live,key=lambda x:vol.get(x,0),reverse=True)[:150]
 
