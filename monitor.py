@@ -26,8 +26,8 @@ def hdr():
     }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
-DIST={"15m":.01,"1H":.018,"1D":.03}
-MAX_HOLD={"15m":100,"1H":100,"1D":30}
+DIST={"15 cachem":.01,"1H":.018[k,"1D":.03]}
+MAX_HOLD={"15m":=(time100,"1H":100,"1D":30}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -96,7 +96,7 @@ def candles(sym,bar,n=250):
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<10:return
-        cache[k]=(time.time(),d);return d
+       .time(),d);return d
     except:return
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
@@ -309,10 +309,22 @@ def normal(d,tf,sym):
         if risk>0:add("SHORT","BREAKOUT",sl,p-1.5*risk)
     return max(out,key=lambda x:x["score"]) if out else None
 
-def scan():
-    st=load_state();clean(st);daily_report(st)
-    ss=coins()
-    if not ss:print("no coins");save_state(st);return
+def send_signal(st,s):
+    t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
+    stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="15m") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
+    txt=(f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
+         f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
+         f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
+         f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
+    if post(txt):
+        d=candles(s["sym"],TF[s["tf"]][0],220)
+        if d is not None:mark(st,s["sym"],s["tf"],s["dir"],d,"sent")
+        st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
+        print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
+        return True
+    return False
+
+def check_live(st):
     keep=[]
     for s in st.get("live") or []:
         tf=s.get("tf")
@@ -336,10 +348,20 @@ def scan():
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
-    hits=[]
+def scan():
+    st=load_state();clean(st);daily_report(st)
+    ss=coins()
+    if not ss:print("no coins");save_state(st);return
+    check_live(st)
+
+    # 每个周期独立扫描 + 立即发送
     for tf,(bar,n,_,_) in TF.items():
-        if not tf_run(tf):print(f"[{tf}] 跳过");continue
+        if stop:break
+        if not tf_run(tf):
+            print(f"[{tf}] 跳过")
+            continue
         print(f"[扫描] {tf}")
+        hits=[]
         for sym in ss:
             if stop:break
             dd=candles(sym,bar,n)
@@ -349,25 +371,16 @@ def scan():
             if sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}) and bars_since(dd,int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:continue
             s["sent_ts"]=int(dd.ts.iloc[-1])
             hits.append(s)
-        if stop:break
-    hits.sort(key=lambda x:({"1D":0,"1H":1,"15m":2}[x["tf"]],-x["score"]))
-    picked=hits[:MAX_SEND_PER_SCAN]
+        hits.sort(key=lambda x:-x["score"])
+        picked=hits[:MAX_SEND_PER_SCAN]
+        cnt=0
+        for s in picked:
+            if send_signal(st,s):cnt+=1
+            time.sleep(.2)
+        save_state(st)
+        print(f"[{tf}] hits {len(hits)} sent {cnt}")
 
-    for s in picked:
-        t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
-        stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="15m") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
-        txt=(f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
-             f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
-             f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
-             f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
-        if post(txt):
-            d=candles(s["sym"],TF[s["tf"]][0],220)
-            if d is not None:mark(st,s["sym"],s["tf"],s["dir"],d,"sent")
-            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
-            print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
-        time.sleep(.2)
-    save_state(st)
-    print(now_bj().strftime("%H:%M:%S"),"hits",len(hits),"sent",len(picked))
+    print(now_bj().strftime("%H:%M:%S"),"完成")
 
 if __name__=="__main__":
     scan()
