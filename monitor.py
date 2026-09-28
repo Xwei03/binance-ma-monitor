@@ -135,14 +135,16 @@ def save_state(st):
     with open(STATE+".tmp","w",encoding="utf8") as f:json.dump(st,f,ensure_ascii=False)
     os.replace(STATE+".tmp",STATE)
 
-def sdk(sym,tf,side):return f"{sym}|{tf}|{side}"
+def sdk(sym,tf,side,typ):
+    return f"{sym}|{tf}|{side}|{typ}"
 
-def too_soon(st,sym,tf,side,d,bars):
-    k=sdk(sym,tf,side);ts=st.get("cool",{}).get(k) or st.get("sent",{}).get(k)
+def too_soon(st,sym,tf,side,typ,d,bars):
+    k=sdk(sym,tf,side,typ)
+    ts=st.get("cool",{}).get(k) or st.get("sent",{}).get(k)
     return ts and bars_since(d,int(ts))<bars
 
-def mark(st,sym,tf,side,d,where="sent"):
-    st.setdefault(where,{})[sdk(sym,tf,side)]=int(d.ts.iloc[-1])
+def mark(st,sym,tf,side,typ,d,where="sent"):
+    st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
 
 def rec(st,s,r):
     st.setdefault("results",[]).append({"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
@@ -333,10 +335,10 @@ def normal(d,tf,sym):
             pr=near_res(d,p)
             if pr is not None:
                 cd=pr*0.985
-                if cd<=p:continue
-                tp=min(cd,base_tp)
-            else:tp=base_tp
-            add("LONG","BREAKOUT",sl,tp,1.5)
+                if cd>p:
+                    add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
+            else:
+                add("LONG","BREAKOUT",sl,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
         if risk>0:
@@ -344,10 +346,10 @@ def normal(d,tf,sym):
             sp=near_sup(d,p)
             if sp is not None:
                 cd=sp*1.015
-                if cd>=p:continue
-                tp=max(cd,base_tp)
-            else:tp=base_tp
-            add("SHORT","BREAKOUT",sl,tp,1.5)
+                if cd<p:
+                    add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
+            else:
+                add("SHORT","BREAKOUT",sl,base_tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
@@ -364,9 +366,10 @@ def send_signal(st,s):
          f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
          f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post(txt):
-        st.setdefault("sent",{})[sdk(s["sym"],s["tf"],s["dir"])]=int(s["sent_ts"])
-        live_keys={sdk(x["sym"],x["tf"],x["dir"]) for x in st.get("live",[])}
-        if sdk(s["sym"],s["tf"],s["dir"]) not in live_keys:
+        key=sdk(s["sym"],s["tf"],s["dir"],s["type"])
+        st.setdefault("sent",{})[key]=int(s["sent_ts"])
+        live_keys={sdk(x.get("sym",""),x.get("tf",""),x.get("dir",""),x.get("type","")) for x in st.get("live",[])}
+        if key not in live_keys:
             st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
         print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
         return True
@@ -383,15 +386,15 @@ def check_live(st):
         f=d[d.ts>ts0]
         if len(f)==0:keep.append(s);continue
         hi=f.h.max();lo=f.l.min()
-        sl,tp,side=s["sl"],s["tp"],s["dir"]
+        sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         hs=(lo<=sl) if side=="LONG" else (hi>=sl)
         ht=(hi>=tp) if side=="LONG" else (lo<=tp)
         if hs and ht:
             r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
-            mark(st,s["sym"],tf,side,d,"cool");rec(st,s,r if r=="WIN" else "LOSS")
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,r if r=="WIN" else "LOSS")
             print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf);continue
-        if ht:mark(st,s["sym"],tf,side,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
-        if hs:mark(st,s["sym"],tf,side,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
+        if ht:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
+        if hs:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):print("TIMEOUT",s["sym"],tf);continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
@@ -415,8 +418,9 @@ def scan():
             dd=candles(sym,bar,n)
             s=signal(dd,tf,sym)
             if not s:continue
-            if too_soon(st,s["sym"],tf,s["dir"],dd,DEDUP_BARS):continue
-            if sdk(s["sym"],tf,s["dir"]) in st.get("cool",{}) and bars_since(dd,int(st["cool"][sdk(s["sym"],tf,s["dir"])]))<COOL_BARS:continue
+            if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
+            key=sdk(s["sym"],tf,s["dir"],s["type"])
+            if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
             s["sent_ts"]=int(dd.ts.iloc[-1])
             hits.append(s)
         hits.sort(key=lambda x:-x["score"])
