@@ -167,6 +167,8 @@ def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
     st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=c}
+    kc=int(time.time())-KEEP_RESULT_DAYS*86400
+    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=kc]
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
@@ -194,8 +196,6 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
         st["last_report"]=today;print("DAILY_REPORT",tw,tl)
-    kc=int(time.time())-KEEP_RESULT_DAYS*86400
-    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=kc]
 
 def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
@@ -268,7 +268,8 @@ def prepare(d,tf,sym):
             pr=near_res(d,p)
             if pr is not None:
                 cd=pr*0.985
-                tp=cd if cd>p else p+2.0*risk
+                if cd<=p:continue
+                tp=cd
             else:
                 tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
@@ -282,7 +283,8 @@ def prepare(d,tf,sym):
             sp=near_sup(d,p)
             if sp is not None:
                 cd=sp*1.015
-                tp=cd if cd<p else p-2.0*risk
+                if cd>=p:continue
+                tp=cd
             else:
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
@@ -327,19 +329,23 @@ def normal(d,tf,sym):
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
         sl=d.l.iloc[-2]-.3*a;risk=p-sl
         if risk>0:
-            pr=near_res(d,p);base_tp=p+1.5*risk
+            base_tp=p+1.5*risk
+            pr=near_res(d,p)
             if pr is not None:
                 cd=pr*0.985
-                tp=min(cd,base_tp) if cd>p else base_tp
+                if cd<=p:continue
+                tp=min(cd,base_tp)
             else:tp=base_tp
             add("LONG","BREAKOUT",sl,tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
         if risk>0:
-            sp=near_sup(d,p);base_tp=p-1.5*risk
+            base_tp=p-1.5*risk
+            sp=near_sup(d,p)
             if sp is not None:
                 cd=sp*1.015
-                tp=max(cd,base_tp) if cd<p else base_tp
+                if cd>=p:continue
+                tp=max(cd,base_tp)
             else:tp=base_tp
             add("SHORT","BREAKOUT",sl,tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
@@ -358,9 +364,10 @@ def send_signal(st,s):
          f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
          f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post(txt):
-        d=candles(s["sym"],TF[s["tf"]][0],220)
-        if d is not None:mark(st,s["sym"],s["tf"],s["dir"],d,"sent")
-        st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
+        st.setdefault("sent",{})[sdk(s["sym"],s["tf"],s["dir"])]=int(s["sent_ts"])
+        live_keys={sdk(x["sym"],x["tf"],x["dir"]) for x in st.get("live",[])}
+        if sdk(s["sym"],s["tf"],s["dir"]) not in live_keys:
+            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
         print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
         return True
     return False
@@ -390,6 +397,7 @@ def check_live(st):
     st["live"]=keep[-MAX_LIVE:]
 
 def scan():
+    btc_cache.clear()
     st=load_state();clean(st);daily_report(st)
     ss=coins()
     if not ss:print("no coins");save_state(st);return
