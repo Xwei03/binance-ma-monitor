@@ -32,7 +32,7 @@ TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
-MIN_VOL=100000000
+MIN_VOL=50000000
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -92,7 +92,7 @@ def coins():
         vol[x["instId"]]=v*p
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
     r=sorted(valid,key=lambda x:vol.get(x,0),reverse=True)[:150]
-    print(f"[币种] 成交额≥1亿的币种 {len(r)} 个")
+    print(f"[币种] 成交额≥5000万的币种 {len(r)} 个")
     return r
 
 def candles(sym,bar,n=250):
