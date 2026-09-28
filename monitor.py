@@ -258,9 +258,9 @@ def prepare(d,tf,sym):
         if dist<=0 or dist>cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:continue
         if tf=="15m":
-            if (side=="LONG" and bs<=0) or (side=="SHORT" and bsside>=0):continue
+            if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
         else:
-            if (=="side=="LONG" and bsSH<0) or (ORT" and bs>0):continue
+            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (e20.iloc[-1]<=e60.iloc[-1] or p<e20.iloc[-1]):continue
         if side=="SHORT" and (e20.iloc[-1]>=e60.iloc[-1] or p>e20.iloc[-1]):continue
         st_=(lows[-1]>=lows[0] and lows[-1]>=lows[-2]) if side=="LONG" else (highs[-1]<=highs[0] and highs[-1]<=highs[-2])
