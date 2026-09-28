@@ -32,6 +32,7 @@ TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
+MIN_VOL=100000000
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -84,8 +85,15 @@ def coins():
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
     live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
-    vol={x["instId"]:float(x.get("volCcy24h",0) or 0) for x in b}
-    return sorted(live,key=lambda x:vol.get(x,0),reverse=True)[:150]
+    vol={}
+    for x in b:
+        v=float(x.get("volCcy24h",0) or 0)
+        p=float(x.get("last",0) or 0)
+        vol[x["instId"]]=v*p
+    valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
+    r=sorted(valid,key=lambda x:vol.get(x,0),reverse=True)[:150]
+    print(f"[币种] 成交额≥1亿的币种 {len(r)} 个")
+    return r
 
 def candles(sym,bar,n=250):
     k=(sym,bar,n)
@@ -118,11 +126,20 @@ def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
     d=candles("BTC-USDT-SWAP",bar,220)
     if d is None:btc_cache[bar]=0;return 0
-    p=d.c.iloc[-1];e20=ema(d.c,20).iloc[-1]
+    p=d.c.iloc[-1]
+    e20s=ema(d.c,20)
+    e20=e20s.iloc[-1];e20_prev=e20s.iloc[-4]
+    e60=ema(d.c,60).iloc[-1]
     lo3=d.l.iloc[-3:].min();lo6=d.l.iloc[-6:-3].min()
     hi3=d.h.iloc[-3:].max();hi6=d.h.iloc[-6:-3].max()
-    v=15 if (p>e20 and lo3>=lo6) else (-15 if (p<e20 and hi3<=hi6) else 0)
-    btc_cache[bar]=v;return v
+    if e20>e60 and p>e20 and e20>e20_prev and lo3>=lo6:
+        v=15
+    elif e20<e60 and p<e20 and e20<e20_prev and hi3<=hi6:
+        v=-15
+    else:
+        v=0
+    btc_cache[bar]=v
+    return v
 
 def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
 
@@ -311,6 +328,8 @@ def normal(d,tf,sym):
     sl_mult=TREND_SL.get(tf,2.0)
 
     def add(side,typ,sl,tp,need_rr):
+        if side=="LONG" and bs<=0:return
+        if side=="SHORT" and bs>=0:return
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
