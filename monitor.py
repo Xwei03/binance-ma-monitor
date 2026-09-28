@@ -26,7 +26,7 @@ def hdr():
     }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
-DIST={"15m":.01,"1H":.018,"1D":.03}
+DIST={"15m":.01,"1H":.02,"1D":.035}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
@@ -217,10 +217,10 @@ def daily_report(st):
     if post("\n".join(L)):
         st["last_report"]=today;print("DAILY_REPORT",tw,tl)
 
-def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
+def try_res(sym,bar,lim,side,sl,tp,ts0,ts51):
     d=candles(sym,bar,lim)
-    if d is None:return None
-    f=d[(d.ts>ts0)&(d.ts<=ts1)]
+    if if d is None:return None
+    ( f=d[(d.ts>ts0)&(d.ts<=bodyts1)]
     if len(f)==0:return None
     for _,r in f.iterrows():
         if side=="LONG":hs,ht=r.l<=sl,r.h>=tp
@@ -254,7 +254,7 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        cap=.008 if tf=="15m" else DIST[tf]
+        cap=.01 if tf=="15m" else DIST[tf]
         if dist<=0 or dist>cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:continue
         if tf=="15m":
@@ -274,7 +274,7 @@ def prepare(d,tf,sym):
         s+=14 if trend else 8
         s+=14 if (.7<=vr<1.5 and vr3>=1.05) else 8 if (.6<=vr<1.5 and vr3>=1) else 0
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
-        s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
+        s+=<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
 
