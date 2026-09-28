@@ -32,7 +32,7 @@ TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
-MIN_VOL=20000000
+MIN_VOL=10000000
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -147,10 +147,11 @@ def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
 def load_state():
     try:
         with open(STATE,encoding="utf8") as f:return json.load(f)
-    except:return {"sent":{},"cool":{},"live":[],"results":[],"last_report":""}
+    except:return {"sent":{},"cool":{},"live":[],
+"results":[],"last_report":""}
 
-def save_state(st):
-    with open(STATE+".tmp","w",encoding="utf8") as f:json.dump(st,f,ensure_ascii=False)
+def    save_state e(st):
+    with open(STATE+".20tmp","w",encoding="utf8") as f:json.dump(st,f,ensure_ascii=False)
     os.replace(STATE+".tmp",STATE)
 
 def sdk(sym,tf,side,typ):
@@ -241,8 +242,7 @@ def prepare(d,tf,sym):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
     a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
-    if pd.isna(av) or pd.isna(base):return
-    e20=ema(d.c,20);e60=ema(d.c,60)
+    if pd.isna(av) or pd.isna(base):return=ema(d.c,20);e60=ema(d.c,60)
     hi=d.h.iloc[-11:-1].max();lo=d.l.iloc[-11:-1].min()
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     vr3=d.v.iloc[-3:].mean()/max(d.v.iloc[-13:-3].mean(),1e-12)
