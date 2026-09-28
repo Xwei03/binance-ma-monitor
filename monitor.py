@@ -217,10 +217,10 @@ def daily_report(st):
     if post("\n".join(L)):
         st["last_report"]=today;print("DAILY_REPORT",tw,tl)
 
-def try_res(sym,bar,lim,side,sl,tp,ts0,ts51):
+def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
-    if if d is None:return None
-    ( f=d[(d.ts>ts0)&(d.ts<=bodyts1)]
+    if d is None:return None
+    f=d[(d.ts>ts0)&(d.ts<=ts1)]
     if len(f)==0:return None
     for _,r in f.iterrows():
         if side=="LONG":hs,ht=r.l<=sl,r.h>=tp
@@ -274,7 +274,7 @@ def prepare(d,tf,sym):
         s+=14 if trend else 8
         s+=14 if (.7<=vr<1.5 and vr3>=1.05) else 8 if (.6<=vr<1.5 and vr3>=1) else 0
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
-        s+=<.35 and ar<=1) else 3 if body<.45 else 0
+        s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
 
