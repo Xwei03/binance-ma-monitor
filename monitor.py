@@ -310,7 +310,8 @@ def prepare(d,tf,sym):
             rr=(p-tp)/risk
 
         need=75 if tf in ("15m","1H") else 72
-        if s>=need and rr>=2.0:
+        need_rr=1.8 if tf=="15m" else 2.0
+        if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
                         "hi":float(hi),"lo":float(lo)})
