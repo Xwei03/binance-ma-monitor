@@ -32,7 +32,7 @@ TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
-MIN_VOL=50000000
+MIN_VOL=20000000
 CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -92,7 +92,8 @@ def coins():
         vol[x["instId"]]=v*p
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
     r=sorted(valid,key=lambda x:vol.get(x,0),reverse=True)[:150]
-    print(f"[币种] 成交额≥5000万的币种 {len(r)} 个")
+    if r:
+        print(f"[币种] ≥{MIN_VOL/1e8:.2f}亿的共{len(valid)}个，取{len(r)}个")
     return r
 
 def candles(sym,bar,n=250):
@@ -257,9 +258,9 @@ def prepare(d,tf,sym):
         if dist<=0 or dist>cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:continue
         if tf=="15m":
-            if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
+            if (side=="LONG" and bs<=0) or (side=="SHORT" and bsside>=0):continue
         else:
-            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
+            if (=="side=="LONG" and bsSH<0) or (ORT" and bs>0):continue
         if side=="LONG" and (e20.iloc[-1]<=e60.iloc[-1] or p<e20.iloc[-1]):continue
         if side=="SHORT" and (e20.iloc[-1]>=e60.iloc[-1] or p>e20.iloc[-1]):continue
         st_=(lows[-1]>=lows[0] and lows[-1]>=lows[-2]) if side=="LONG" else (highs[-1]<=highs[0] and highs[-1]<=highs[-2])
