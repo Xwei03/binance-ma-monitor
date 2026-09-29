@@ -2,7 +2,7 @@
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
-BASE="https://data-api.binance.vision"
+BASE="https://fapi.binance.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 PROXY=os.getenv("OKX_PROXY","")
 BJ_TZ=timezone(timedelta(hours=8))
@@ -39,6 +39,26 @@ TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
+current_proxy=[None] # 存放动态代理
+
+def fetch_free_proxy():
+    # 优先尝试抓取德国等非美区代理
+    try:
+        r = requests.get("https://api.proxifly.dev/proxy?country=DE&count=5", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if data and len(data) > 0:
+                return data[0]['proxy']
+    except: pass
+    # 备用方案：从通用免费列表中随机选一个
+    try:
+        r = requests.get("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", timeout=10)
+        if r.status_code == 200:
+            proxies = [line.strip() for line in r.text.splitlines() if line.strip()]
+            if proxies:
+                return f"http://{random.choice(proxies)}"
+    except: pass
+    return None
 
 def now_bj():return datetime.now(BJ_TZ)
 
@@ -61,8 +81,17 @@ def get(path,p={}):
     for i in range(5):
         try:
             throttle()
-            kw={"params":p,"timeout":20,"headers":hdr()}
-            if PROXY:kw["proxies"]={"http":PROXY,"https":PROXY}
+            kw={"params":p,"timeout":20,"headers":hdr(),"verify":False}
+            
+            proxy_to_use = PROXY
+            if not proxy_to_use:
+                if current_proxy[0] is None:
+                    current_proxy[0] = fetch_free_proxy()
+                proxy_to_use = current_proxy[0]
+                
+            if proxy_to_use:
+                kw["proxies"]={"http":proxy_to_use,"https":proxy_to_use}
+                
             r=requests.get(BASE+path,**kw)
             if r.status_code in (403,451):
                 print(f"[Binance] HTTP {r.status_code} 停止本轮");stop=True;return
@@ -78,7 +107,12 @@ def get(path,p={}):
                 return
             return
         except Exception as e:
-            print(f"[Binance] {type(e).__name__}");time.sleep(min(2**i*2,20))
+            err_name = type(e).__name__
+            print(f"[Binance] {err_name}")
+            # 如果是代理相关的错误，重置代理，下次换新的
+            if not PROXY and ("Proxy" in err_name or "Connection" in err_name or "Timeout" in err_name):
+                current_proxy[0] = None
+            time.sleep(min(2**i*2,20))
 
 def coins():
     a=get("/fapi/v1/exchangeInfo")
