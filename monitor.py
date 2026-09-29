@@ -268,10 +268,11 @@ def prepare(d,tf,sym):
         trend=(e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]) if side=="LONG" else (e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4])
         s=0
         s+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
-        if tf=="15m":s+=16 if dist<=.003 else 12 if dist<=.005 else 0
-        else:s+=16 if dist<=.0075 else 10 if dist<=.012 else 5 if dist<=.018 else 2
+        if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 11 if dist<=.015 else 0
+        elif tf=="1H":s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.025 else 2
+        else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.040 else 2
         s+=15
-        s+=14 if trend else 8
+        s+=8
         s+=14 if (.7<=vr<1.5 and vr3>=1.05) else 8 if (.6<=vr<1.5 and vr3>=1) else 0
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
