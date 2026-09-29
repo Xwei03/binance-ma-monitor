@@ -310,7 +310,7 @@ def prepare(d,tf,sym):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=50 if tf in ("15m","1H") else 50
+        need=75 if tf in ("15m","1H") else 72
         need_rr=1.8 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
