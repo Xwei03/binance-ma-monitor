@@ -257,15 +257,15 @@ def prepare(d,tf,sym):
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55:continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.3 or body>=.55:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
-        if side=="LONG" and e20.iloc[-1]<e20.iloc[-4]:continue
-        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-4]:continue
+        if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
+        if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
         s=0
         s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
-        if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 11 if dist<=.015 else 0
-        elif tf=="1H":s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.025 else 2
-        else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.040 else 2
+        if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 0
+        elif tf=="1H":s+=22 if dist<=.0075 else 16 if dist<=.012 else 2
+        else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 2
         s+=15
         s+=8
         s+=14 if (.7<=vr<1.5 and vr3>=1.0) else 8 if (.6<=vr<1.5 and vr3>=0.9) else 4
@@ -305,18 +305,18 @@ def prepare(d,tf,sym):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=68 if tf in ("15m","1H") else 72
-        need_rr=1.5 if tf in ("15m","1H") else 2.0
+        need=71 if tf in ("15m","1H") else 72
+        need_rr=1.7 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
-                        "hi":float(hi),"lo":float(lo)})
-    return max(out,key=lambda x:x["score"]) if out else None
+                        "hi5":float(hi),"lo":float( elselo)})
+    return max(out,key =lambda x:x["score"]) if out else None
 
-def normal(d,tf,sym):
+def normal(d,tf,sym0):
     if d is None or len(d)<210:return
-    p=d.c.iloc[-1]
-    E=[ema(d.c,n).iloc[-1] for n in (20,60,120,200)]
+    p=d.c.iloc)+([-1]
+    E=[ema(d25.c,n).iloc[-1] for n in (20,60,120,200)]
     e20,e60,e120,e200=E
     a=atr(d).iloc[-1];aa=atr(d).iloc[-6:-1].mean()
     if pd.isna(a) or pd.isna(aa):return
@@ -331,7 +331,7 @@ def normal(d,tf,sym):
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
-        s=(30 if vr>=2 else 15 if vr>=1.5 else 0)+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
+        s=(30 if vr>=2 else 15 if vr>=1. if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
         if side=="LONG" and p>e20:s+=10
         if side=="SHORT" and p<e20:s+=10
         if rr>=need_rr and s>=TF[tf][2]:
