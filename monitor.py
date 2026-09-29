@@ -1,6 +1,7 @@
 # 宝宝巴士🚌上车就赚 - 币安信号扫描 (15m/1H/1D)
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
+from urllib.parse import urlencode, quote
 
 BASE="https://fapi.binance.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
@@ -22,7 +23,6 @@ def hdr():
         "Accept":"application/json, text/plain, */*",
         "Accept-Language":"zh-CN,zh;q=0.9,en;q=0.8",
         "Connection":"keep-alive",
-        "Referer":"https://www.binance.com/",
     }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
@@ -39,26 +39,6 @@ TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
-current_proxy=[None] # 存放动态代理
-
-def fetch_free_proxy():
-    # 优先尝试抓取德国等非美区代理
-    try:
-        r = requests.get("https://api.proxifly.dev/proxy?country=DE&count=5", timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if data and len(data) > 0:
-                return data[0]['proxy']
-    except: pass
-    # 备用方案：从通用免费列表中随机选一个
-    try:
-        r = requests.get("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", timeout=10)
-        if r.status_code == 200:
-            proxies = [line.strip() for line in r.text.splitlines() if line.strip()]
-            if proxies:
-                return f"http://{random.choice(proxies)}"
-    except: pass
-    return None
 
 def now_bj():return datetime.now(BJ_TZ)
 
@@ -81,22 +61,17 @@ def get(path,p={}):
     for i in range(5):
         try:
             throttle()
-            kw={"params":p,"timeout":20,"headers":hdr(),"verify":False}
-            
-            proxy_to_use = PROXY
-            if not proxy_to_use:
-                if current_proxy[0] is None:
-                    current_proxy[0] = fetch_free_proxy()
-                proxy_to_use = current_proxy[0]
-                
-            if proxy_to_use:
-                kw["proxies"]={"http":proxy_to_use,"https":proxy_to_use}
-                
-            r=requests.get(BASE+path,**kw)
+            target=BASE+path
+            if p:
+                target+="?"+urlencode(p)
+            proxy_url="https://api.codetabs.com/v1/proxy?quest="+quote(target,safe='')
+            kw={"timeout":30,"headers":hdr()}
+            if PROXY:kw["proxies"]={"http":PROXY,"https":PROXY}
+            r=requests.get(proxy_url,**kw)
             if r.status_code in (403,451):
                 print(f"[Binance] HTTP {r.status_code} 停止本轮");stop=True;return
             if r.status_code==418:
-                print("[Binance] 418 被封 等60s");time.sleep(60);continue
+                print("[Binance] 418 等60s");time.sleep(60);continue
             if r.status_code==429 or r.status_code>=500:
                 w=min(3*2**i,30)+random.random()*2
                 print(f"[Binance] HTTP {r.status_code} 等{w:.1f}s");time.sleep(w);continue
@@ -107,12 +82,7 @@ def get(path,p={}):
                 return
             return
         except Exception as e:
-            err_name = type(e).__name__
-            print(f"[Binance] {err_name}")
-            # 如果是代理相关的错误，重置代理，下次换新的
-            if not PROXY and ("Proxy" in err_name or "Connection" in err_name or "Timeout" in err_name):
-                current_proxy[0] = None
-            time.sleep(min(2**i*2,20))
+            print(f"[Binance] {type(e).__name__}");time.sleep(min(2**i*2,20))
 
 def coins():
     a=get("/fapi/v1/exchangeInfo")
@@ -165,12 +135,9 @@ def btc(bar):
     p=d.c.iloc[-1]
     e20=ema(d.c,20).iloc[-1]
     e60=ema(d.c,60).iloc[-1]
-    if e20>e60 and p>e20:
-        v=15
-    elif e20<e60 and p<e20:
-        v=-15
-    else:
-        v=0
+    if e20>e60 and p>e20:v=15
+    elif e20<e60 and p<e20:v=-15
+    else:v=0
     btc_cache[bar]=v
     return v
 
@@ -185,8 +152,7 @@ def save_state(st):
     with open(STATE+".tmp","w",encoding="utf8") as f:json.dump(st,f,ensure_ascii=False)
     os.replace(STATE+".tmp",STATE)
 
-def sdk(sym,tf,side,typ):
-    return f"{sym}|{tf}|{side}|{typ}"
+def sdk(sym,tf,side,typ):return f"{sym}|{tf}|{side}|{typ}"
 
 def too_soon(st,sym,tf,side,typ,d,bars):
     k=sdk(sym,tf,side,typ)
@@ -210,7 +176,7 @@ def post(txt):
             if r.status_code==200 and res.get("code")==0:return True
             if r.status_code==429:
                 print(f"[飞书] 限流 重试{i+1}/3");time.sleep(min(5*2**i,30));continue
-            print(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
+            print(f"[飞书] 被拒 HTTP:{r.status_code}");return False
         except Exception as e:
             print(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
     return False
@@ -228,16 +194,7 @@ def daily_report(st):
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=0
-    combos=[
-        ("15m","PREPARE","15m埋伏"),
-        ("15m","BREAKOUT","15m突破"),
-        ("1H","PREPARE","1H埋伏"),
-        ("1H","TREND","1H趋势"),
-        ("1H","BREAKOUT","1H突破"),
-        ("1D","PREPARE","1D埋伏"),
-        ("1D","TREND","1D趋势"),
-        ("1D","BREAKOUT","1D突破"),
-    ]
+    combos=[("15m","PREPARE","15m埋伏"),("15m","BREAKOUT","15m突破"),("1H","PREPARE","1H埋伏"),("1H","TREND","1H趋势"),("1H","BREAKOUT","1H突破"),("1D","PREPARE","1D埋伏"),("1D","TREND","1D趋势"),("1D","BREAKOUT","1D突破")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
         sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
@@ -285,10 +242,8 @@ def prepare(d,tf,sym):
     bs=btc(TF[tf][0])
     lows=d.l.iloc[-6:-1].values;highs=d.h.iloc[-6:-1].values
     out=[]
-
     dist_base=DIST[tf]
-    dist_cap=min(dist_base*max(ar,0.6), dist_base*1.5)
-
+    dist_cap=min(dist_base*max(ar,0.6),dist_base*1.5)
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
@@ -311,7 +266,6 @@ def prepare(d,tf,sym):
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
-
         if side=="LONG":
             stsl=float(min(lows));sl=stsl-1.0*av
             if p-sl<0.8*av:sl=p-0.8*av
@@ -324,8 +278,7 @@ def prepare(d,tf,sym):
                 cd=pr*0.985
                 if cd<=p:continue
                 tp=cd
-            else:
-                tp=p+2.0*risk if tf!="1H" else p+2.2*risk
+            else:tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
             stsl=float(max(highs));sl=stsl+1.0*av
@@ -339,10 +292,8 @@ def prepare(d,tf,sym):
                 cd=sp*1.015
                 if cd>=p:continue
                 tp=cd
-            else:
-                tp=p-2.0*risk if tf!="1H" else p-2.2*risk
+            else:tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
-
         need=75 if tf in ("15m","1H") else 72
         need_rr=1.8 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
@@ -362,7 +313,6 @@ def normal(d,tf,sym):
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
-
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and bs<=0:return
         if side=="SHORT" and bs>=0:return
@@ -375,13 +325,9 @@ def normal(d,tf,sym):
         if rr>=need_rr and s>=TF[tf][2]:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
-
     if tf!="15m":
-        if e20>e60>e120 and p>e200:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+3*a),1.2)
-        if e20<e60<e120 and p<e200:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-3*a),1.2)
-
+        if e20>e60>e120 and p>e200:add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+3*a),1.2)
+        if e20<e60<e120 and p<e200:add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-3*a),1.2)
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
         sl=d.l.iloc[-2]-.3*a;risk=p-sl
@@ -390,10 +336,8 @@ def normal(d,tf,sym):
             pr=near_res(d,p)
             if pr is not None:
                 cd=pr*0.985
-                if cd>p:
-                    add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
-            else:
-                add("LONG","BREAKOUT",sl,base_tp,1.5)
+                if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
+            else:add("LONG","BREAKOUT",sl,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
         if risk>0:
@@ -401,10 +345,8 @@ def normal(d,tf,sym):
             sp=near_sup(d,p)
             if sp is not None:
                 cd=sp*1.015
-                if cd<p:
-                    add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
-            else:
-                add("SHORT","BREAKOUT",sl,base_tp,1.5)
+                if cd<p:add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
+            else:add("SHORT","BREAKOUT",sl,base_tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
@@ -447,10 +389,8 @@ def check_live(st):
         if hs and ht:
             r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
             mark(st,s["sym"],tf,side,typ,d,"cool")
-            if r is None:
-                rec(st,s,"ERROR");print("ERR",s["sym"],tf)
-            else:
-                rec(st,s,r);print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf)
+            if r is None:rec(st,s,"ERROR");print("ERR",s["sym"],tf)
+            else:rec(st,s,r);print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf)
             continue
         if ht:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
         if hs:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
@@ -464,7 +404,6 @@ def scan():
     ss=coins()
     if not ss:print("no coins");save_state(st);return
     check_live(st)
-
     for tf,(bar,n,_,_) in TF.items():
         if stop:break
         if not tf_run(tf):
@@ -490,7 +429,6 @@ def scan():
             time.sleep(.3)
         save_state(st)
         print(f"[{tf}] hits {len(hits)} sent {cnt}")
-
     print(now_bj().strftime("%H:%M:%S"),"完成")
 
 if __name__=="__main__":
