@@ -256,18 +256,11 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        k1 = dist<=0 or dist>dist_cap
-        k2 = (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55
-        k3 = (side=="LONG" and bs<0) or (side=="SHORT" and bs>0)
-        k4 = side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4])
-        k5 = side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4])
-        print(f"[K] {sym} {side} dist={dist:.4f}/{dist_cap:.4f} vr={vr:.2f} ar={ar:.2f} body={body:.2f} bs={bs} p/e20={p:.4f}/{e20.iloc[-1]:.4f} e20_now_4ago={e20.iloc[-1]:.6f}/{e20.iloc[-4]:.6f} | k1={k1} k2={k2} k3={k3} k4={k4} k5={k5}")
-        if k1:continue
-        if k2:continue
-        if k3:continue
-        if k4:continue
-        if k5:continue
-        trend=(e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]) if side=="LONG" else (e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4])
+        if dist<=0 or dist>dist_cap:continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55:continue
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
+        if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
+        if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
         s=0
         s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
         if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 11 if dist<=.015 else 0
@@ -280,7 +273,6 @@ def prepare(d,tf,sym):
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
-        print(f"[S] {sym} {side} s={s} (need=68)")
 
         if side=="LONG":
             stsl=float(min(lows));sl=stsl-1.0*av
