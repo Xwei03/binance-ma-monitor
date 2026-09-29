@@ -339,13 +339,13 @@ def normal(d,tf,sym):
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60>e120 and p>e200:
+        if e20>e60>e120 and p>e200 and (p-e20)/p<0.03:
             add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+3*a),1.2)
-        if e20<e60<e120 and p<e200:
+        if e20<e60<e120 and p<e200 and (e20-p)/p<0.03:
             add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-3*a),1.2)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3:
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.6:
         sl=d.l.iloc[-2]-.3*a;risk=p-sl
         if risk>0:
             base_tp=p+1.5*risk
@@ -356,7 +356,7 @@ def normal(d,tf,sym):
                     add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3:
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3 and body<0.6:
         sl=d.h.iloc[-2]+.3*a;risk=sl-p
         if risk>0:
             base_tp=p-1.5*risk
