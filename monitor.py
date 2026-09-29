@@ -2,7 +2,7 @@
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
-BASE="https://binance-proxy.axdnh520.workers.dev"
+BASE="https://data-api.binance.vision"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 PROXY=os.getenv("OKX_PROXY","")
 BJ_TZ=timezone(timedelta(hours=8))
