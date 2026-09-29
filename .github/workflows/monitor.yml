@@ -1,10 +1,10 @@
-name: Binance Monitor
+name: OKX Monitor
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: binance-monitor
+  group: okx-monitor
   cancel-in-progress: true
 
 permissions:
@@ -29,4 +29,5 @@ jobs:
       - name: Run
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          OKX_PROXY: ${{ secrets.OKX_PROXY }}
         run: python monitor.py
