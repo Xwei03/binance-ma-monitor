@@ -275,7 +275,7 @@ def prepare(d,tf,sym):
         else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.040 else 2
         s+=15
         s+=8
-        s+=14 if (.7<=vr<1.5 and vr3>=1.05) else 8 if (.6<=vr<1.5 and vr3>=1) else 0
+        s+=14 if (.7<=vr<1.5 and vr3>=1.0) else 8 if (.6<=vr<1.5 and vr3>=0.9) else 4
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
