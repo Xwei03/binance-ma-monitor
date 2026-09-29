@@ -256,7 +256,7 @@ def prepare(d,tf,sym):
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55:continue
         if tf=="15m":
             if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
         else:
@@ -299,7 +299,7 @@ def prepare(d,tf,sym):
             risk=sl-p
             if risk<=0:continue
             if tf=="1D":
-                sl=max(sl,p+2*av);risk=p-sl
+                sl=max(sl,p+2*av);risk=sl-p
             sp=near_sup(d,p)
             if sp is not None:
                 cd=sp*1.015
