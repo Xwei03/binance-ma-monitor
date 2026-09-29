@@ -1,10 +1,10 @@
-name: OKX Monitor
+name: Binance Monitor
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: okx-monitor
+  group: binance-monitor
   cancel-in-progress: true
 
 permissions:
