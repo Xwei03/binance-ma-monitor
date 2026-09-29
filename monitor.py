@@ -115,12 +115,12 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def near_res(d,p):
-    h=d.h.iloc[-201:-1];a=h[h>p]
+def near_res(d,p,look=201):
+    h=d.h.iloc[-look:-1];a=h[h>p]
     return float(a.min()) if len(a) else None
 
-def near_sup(d,p):
-    l=d.l.iloc[-201:-1];b=l[l<p]
+def near_sup(d,p,look=201):
+    l=d.l.iloc[-look:-1];b=l[l<p]
     return float(b.max()) if len(b) else None
 
 def btc(bar):
@@ -254,10 +254,14 @@ def prepare(d,tf,sym):
     dist_base=DIST[tf]
     dist_cap=min(dist_base*max(ar,1.0), dist_base*1.5)
 
+    disc_l = 0.97 if tf=="1D" else 0.985
+    disc_s = 1.03 if tf=="1D" else 1.015
+
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.3 or body>=.55:continue
+        if tf=="15m" and dist<=0.001:continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.8 or ar>1.3 or body>=.55:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
@@ -268,7 +272,7 @@ def prepare(d,tf,sym):
         else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 2
         s+=15
         s+=8
-        s+=14 if (.7<=vr<1.5 and vr3>=1.0) else 8 if (.6<=vr<1.5 and vr3>=0.9) else 4
+        s+=14 if (.7<=vr<1.8 and vr3>=1.0) else 8 if (.6<=vr<1.8 and vr3>=0.9) else 4
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
@@ -283,7 +287,7 @@ def prepare(d,tf,sym):
                 sl=min(sl,p-2*av);risk=p-sl
             pr=near_res(d,p)
             if pr is not None:
-                cd=pr*0.985
+                cd=pr*disc_l
                 if cd<=p:continue
                 tp=cd
             else:
@@ -298,14 +302,14 @@ def prepare(d,tf,sym):
                 sl=max(sl,p+2*av);risk=sl-p
             sp=near_sup(d,p)
             if sp is not None:
-                cd=sp*1.015
+                cd=sp*disc_s
                 if cd>=p:continue
                 tp=cd
             else:
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=71 if tf in ("15m","1H") else 72
+        need=73 if tf in ("15m","1H") else 72
         need_rr=1.7 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
@@ -322,8 +326,13 @@ def normal(d,tf,sym):
     if pd.isna(a) or pd.isna(aa):return
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
+    body_prev=abs(d.c.iloc[-2]-d.o.iloc[-2])/max(d.h.iloc[-2]-d.l.iloc[-2],a*.01)
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
+
+    disc_l = 0.97 if tf=="1D" else 0.985
+    disc_s = 1.03 if tf=="1D" else 1.015
+    gap_max = 0.06 if tf=="1D" else 0.04
 
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and bs<0:return
@@ -331,7 +340,7 @@ def normal(d,tf,sym):
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
-        s=(30 if vr>=2 else 15 if vr>=1.5 else 0)+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+min(max(bs if side=="LONG" else -bs,0),15)
+        s=(30 if vr>=2 else 15 if vr>=1.5 else 0)+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if side=="LONG" and p>e20:s+=10
         if side=="SHORT" and p<e20:s+=10
         if rr>=need_rr and s>=TF[tf][2]:
@@ -339,30 +348,30 @@ def normal(d,tf,sym):
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60>e120 and p>e200 and (p-e20)/p<0.04:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+3*a),1.2)
-        if e20<e60<e120 and p<e200 and (e20-p)/p<0.04:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-3*a),1.2)
+        if e20>e60>e120 and p>e200 and (p-e20)/p<gap_max:
+            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+5*a),1.5)
+        if e20<e60<e120 and p<e200 and (e20-p)/p<gap_max:
+            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-5*a),1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.65:
-        sl=d.l.iloc[-2]-.3*a;risk=p-sl
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and 1.3<=vr<3 and body<0.65 and body_prev<0.65:
+        sl=d.l.iloc[-2]-.5*a;risk=p-sl
         if risk>0:
             base_tp=p+1.5*risk
-            pr=near_res(d,p)
+            pr=near_res(d,p,21)
             if pr is not None:
-                cd=pr*0.985
+                cd=pr*disc_l
                 if cd>p:
                     add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3 and body<0.65:
-        sl=d.h.iloc[-2]+.3*a;risk=sl-p
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and 1.3<=vr<3 and body<0.65 and body_prev<0.65:
+        sl=d.h.iloc[-2]+.5*a;risk=sl-p
         if risk>0:
             base_tp=p-1.5*risk
-            sp=near_sup(d,p)
+            sp=near_sup(d,p,21)
             if sp is not None:
-                cd=sp*1.015
+                cd=sp*disc_s
                 if cd<p:
                     add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
             else:
