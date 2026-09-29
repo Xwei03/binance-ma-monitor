@@ -1,8 +1,8 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (15m/1H/1D)
+# 宝宝巴士🚌上车就赚 - 币安信号扫描 (15m/1H/1D)
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
-BASE="https://openapi.okx.com"
+BASE="https://binance-proxy.axdnh520.workers.dev"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 PROXY=os.getenv("OKX_PROXY","")
 BJ_TZ=timezone(timedelta(hours=8))
@@ -22,7 +22,7 @@ def hdr():
         "Accept":"application/json, text/plain, */*",
         "Accept-Language":"zh-CN,zh;q=0.9,en;q=0.8",
         "Connection":"keep-alive",
-        "Referer":"https://www.okx.com/",
+        "Referer":"https://www.binance.com/",
     }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
@@ -65,31 +65,30 @@ def get(path,p):
             if PROXY:kw["proxies"]={"http":PROXY,"https":PROXY}
             r=requests.get(BASE+path,**kw)
             if r.status_code in (403,451):
-                print(f"[OKX] HTTP {r.status_code} 停止本轮");stop=True;return
+                print(f"[Binance] HTTP {r.status_code} 停止本轮");stop=True;return
             if r.status_code==418:
-                print("[OKX] 418 被封 等60s");time.sleep(60);continue
+                print("[Binance] 418 被封 等60s");time.sleep(60);continue
             if r.status_code==429 or r.status_code>=500:
                 w=min(3*2**i,30)+random.random()*2
-                print(f"[OKX] HTTP {r.status_code} 等{w:.1f}s");time.sleep(w);continue
+                print(f"[Binance] HTTP {r.status_code} 等{w:.1f}s");time.sleep(w);continue
             x=r.json()
-            if x.get("code")=="0":return x.get("data",[])
-            if x.get("code")=="50011":
-                w=min(3*2**i,30)+random.random()*2
-                print(f"[OKX] 50011 等{w:.1f}s");time.sleep(w);continue
+            if isinstance(x,list):return x
+            if isinstance(x,dict) and x.get("code") is not None:
+                if x.get("code")==-1121:return
+                return
             return
         except Exception as e:
-            print(f"[OKX] {type(e).__name__}");time.sleep(min(2**i*2,20))
+            print(f"[Binance] {type(e).__name__}");time.sleep(min(2**i*2,20))
 
 def coins():
-    a=get("/api/v5/public/instruments",{"instType":"SWAP"})
-    b=get("/api/v5/market/tickers",{"instType":"SWAP"})
+    a=get("/fapi/v1/exchangeInfo")
+    b=get("/fapi/v1/ticker/24hr")
     if not a or not b:return []
-    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
+    live={x["symbol"] for x in a.get("symbols",[]) if x.get("quoteAsset")=="USDT" and x.get("contractType")=="PERPETUAL" and x.get("status")=="TRADING"}
     vol={}
     for x in b:
-        v=float(x.get("volCcy24h",0) or 0)
-        p=float(x.get("last",0) or 0)
-        vol[x["instId"]]=v*p
+        v=float(x.get("quoteVolume",0) or 0)
+        vol[x["symbol"]]=v
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
     r=sorted(valid,key=lambda x:vol.get(x,0),reverse=True)[:150]
     if r:
@@ -99,12 +98,14 @@ def coins():
 def candles(sym,bar,n=250):
     k=(sym,bar,n)
     if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
-    x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
+    binance_bar={"15m":"15m","1H":"1h","1D":"1d"}.get(bar,"15m")
+    x=get("/fapi/v1/klines",{"symbol":sym,"interval":binance_bar,"limit":str(n)})
     if not x:return
     try:
-        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
-                       columns=["ts","o","h","l","c","v","ok"])
-        d=d[d.ok=="1"].reset_index(drop=True)
+        d=pd.DataFrame(x,columns=["ts","o","h","l","c","v","close_time","qav","trades","tbb","tbq","ignore"])
+        d=d[["ts","o","h","l","c","v"]].astype(float)
+        d["ts"]=d["ts"].astype(int)
+        d["ok"]="1"
         if len(d)<10:return
         cache[k]=(time.time(),d);return d
     except:return
@@ -125,7 +126,7 @@ def near_sup(d,p):
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
-    d=candles("BTC-USDT-SWAP",bar,220)
+    d=candles("BTCUSDT",bar,220)
     if d is None:btc_cache[bar]=0;return 0
     p=d.c.iloc[-1]
     e20=ema(d.c,20).iloc[-1]
@@ -251,7 +252,6 @@ def prepare(d,tf,sym):
     lows=d.l.iloc[-6:-1].values;highs=d.h.iloc[-6:-1].values
     out=[]
 
-    # 动态距离窗口：ATR 压缩时收紧，ATR 放大时放宽，上限为基准1.5倍
     dist_base=DIST[tf]
     dist_cap=min(dist_base*max(ar,0.6), dist_base*1.5)
 
