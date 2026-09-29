@@ -26,7 +26,7 @@ def hdr():
     }
 
 TF={"15m":("15m",250,75,4),"1H":("1H",250,75,6),"1D":("1D",250,72,4)}
-DIST={"15m":.01,"1H":.02,"1D":.035}
+DIST={"15m":.015,"1H":.025,"1D":.04}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 DEDUP_BARS,COOL_BARS=8,12
@@ -114,6 +114,14 @@ def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
+
+# ★★★ 新增：波动率（近50根ATR均值 ÷ 当前ATR，比值 = 波动强度）★★★
+def vol_ratio(d,look=50):
+    a=atr(d)
+    if a is None or len(a)<look:return 1.0
+    cur=a.iloc[-1];avg=a.iloc[-look:].mean()
+    if pd.isna(cur) or pd.isna(avg) or avg<=0:return 1.0
+    return float(cur/avg)
 
 def near_res(d,p):
     h=d.h.iloc[-201:-1];a=h[h>p]
@@ -249,11 +257,19 @@ def prepare(d,tf,sym):
     lows=d.l.iloc[-6:-1].values;highs=d.h.iloc[-6:-1].values
     out=[]
 
+    # ★★★ 改动1：4个触发阈值随波动浮动（vol_ratio=1.0时精确还原原值）★★★
+    vs=max(0.5,min(vol_ratio(d),2.0))
+    base_cap=.015 if tf=="15m" else DIST[tf]
+    cap=base_cap*(0.6+0.4*vs)
+    vr_max=1.5*(0.8+0.2*vs)
+    ar_max=1.05*(0.95+0.05*vs)
+    body_max=.55*(0.85+0.15*vs)
+
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        cap=.01 if tf=="15m" else DIST[tf]
         if dist<=0 or dist>cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.05 or body>=.55:continue
+        # ★★★ 改动2：过滤用浮动阈值 ★★★
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=vr_max or ar>ar_max or body>=body_max:continue
         if tf=="15m":
             if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
         else:
@@ -306,8 +322,8 @@ def prepare(d,tf,sym):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=75 if tf in ("15m","1H") else 72
-        need_rr=1.8 if tf=="15m" else 2.0
+        need=75 if tf in ("15m","1H") else 72          # ← 门槛分固定，永不浮动
+        need_rr=1.8 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
