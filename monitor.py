@@ -256,11 +256,17 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        if dist<=0 or dist>dist_cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55:continue
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
-        if side=="LONG" and e20.iloc[-1]<e20.iloc[-4]:continue
-        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-4]:continue
+        k1 = dist<=0 or dist>dist_cap
+        k2 = (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55
+        k3 = (side=="LONG" and bs<0) or (side=="SHORT" and bs>0)
+        k4 = side=="LONG" and e20.iloc[-1]<e20.iloc[-4]
+        k5 = side=="SHORT" and e20.iloc[-1]>e20.iloc[-4]
+        print(f"[K] {sym} {side} dist={dist:.4f}/{dist_cap:.4f} vr={vr:.2f} ar={ar:.2f} body={body:.2f} bs={bs} | k1={k1} k2={k2} k3={k3} k4={k4} k5={k5}")
+        if k1:continue
+        if k2:continue
+        if k3:continue
+        if k4:continue
+        if k5:continue
         s=0
         s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
         if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 11 if dist<=.015 else 0
