@@ -263,8 +263,8 @@ def prepare(d,tf,sym):
             if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
         else:
             if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
-        if side=="LONG" and (e20.iloc[-1]<=e60.iloc[-1] or p<e20.iloc[-1]):continue
-        if side=="SHORT" and (e20.iloc[-1]>=e60.iloc[-1] or p>e20.iloc[-1]):continue
+        if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
+        if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
         trend=(e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]) if side=="LONG" else (e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4])
         s=0
         s+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
