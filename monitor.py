@@ -128,14 +128,11 @@ def btc(bar):
     d=candles("BTC-USDT-SWAP",bar,220)
     if d is None:btc_cache[bar]=0;return 0
     p=d.c.iloc[-1]
-    e20s=ema(d.c,20)
-    e20=e20s.iloc[-1];e20_prev=e20s.iloc[-4]
+    e20=ema(d.c,20).iloc[-1]
     e60=ema(d.c,60).iloc[-1]
-    lo3=d.l.iloc[-3:].min();lo6=d.l.iloc[-6:-3].min()
-    hi3=d.h.iloc[-3:].max();hi6=d.h.iloc[-6:-3].max()
-    if e20>e60 and p>e20 and e20>e20_prev and lo3>=lo6:
+    if e20>e60 and p>e20:
         v=15
-    elif e20<e60 and p<e20 and e20<e20_prev and hi3<=hi6:
+    elif e20<e60 and p<e20:
         v=-15
     else:
         v=0
