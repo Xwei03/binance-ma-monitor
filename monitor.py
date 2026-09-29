@@ -280,7 +280,7 @@ def prepare(d,tf,sym):
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
-        print(f"[S] {sym} {side} s={s} (need=75)")
+        print(f"[S] {sym} {side} s={s} (need=68)")
 
         if side=="LONG":
             stsl=float(min(lows));sl=stsl-1.0*av
@@ -313,7 +313,7 @@ def prepare(d,tf,sym):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=75 if tf in ("15m","1H") else 72
+        need=68 if tf in ("15m","1H") else 72
         need_rr=1.8 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
