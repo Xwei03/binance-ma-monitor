@@ -269,7 +269,7 @@ def prepare(d,tf,sym):
         if k5:continue
         trend=(e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]) if side=="LONG" else (e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4])
         s=0
-        s+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
+        s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
         if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 11 if dist<=.015 else 0
         elif tf=="1H":s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.025 else 2
         else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 11 if dist<=.040 else 2
