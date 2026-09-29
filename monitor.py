@@ -305,6 +305,7 @@ def prepare(d,tf,sym):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
+        print(f"[RR] {sym} {side} s={s} rr={rr:.2f}")
         need=68 if tf in ("15m","1H") else 72
         need_rr=1.8 if tf in ("15m","1H") else 2.0
         if s>=need and rr>=need_rr:
