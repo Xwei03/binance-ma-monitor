@@ -192,7 +192,7 @@ def daily_report(st):
     if n.hour!=0 or st.get("last_report")==today:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
-    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=0
+    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=0
     combos=[
         ("15m","PREPARE","15m埋伏"),
         ("15m","BREAKOUT","15m突破"),
@@ -203,16 +203,18 @@ def daily_report(st):
         ("1D","TREND","1D趋势"),
         ("1D","BREAKOUT","1D突破"),
     ]
+    lv=st.get("live",[])
     for tf,typ,lb in combos:
         sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
-        w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
-        t=w+l;tw+=w;tl+=l
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 胜率{(w/t*100) if t else 0:.0f}%")
+        w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS");e=sum(1 for r in sub if r["result"]=="ERROR")
+        p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
+        t=w+l;tw+=w;tl+=l;te+=e
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 在追{p} 胜率{(w/t*100) if t else 0:.0f}%")
     tt=tw+tl
-    L.append(f"警报 合计：止盈{tw} 止损{tl} 胜率{(tw/tt*100) if tt else 0:.0f}%")
+    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
-        st["last_report"]=today;print("DAILY_REPORT",tw,tl)
+        st["last_report"]=today;print(f"DAILY_REPORT",tw,tl,te,len(lv))
 
 def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
@@ -410,8 +412,12 @@ def check_live(st):
         ht=(hi>=tp) if side=="LONG" else (lo<=tp)
         if hs and ht:
             r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,r if r=="WIN" else "LOSS")
-            print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf);continue
+            mark(st,s["sym"],tf,side,typ,d,"cool")
+            if r is None:
+                rec(st,s,"ERROR");print("ERR",s["sym"],tf)
+            else:
+                rec(st,s,r);print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf)
+            continue
         if ht:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
         if hs:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):print("TIMEOUT",s["sym"],tf);continue
