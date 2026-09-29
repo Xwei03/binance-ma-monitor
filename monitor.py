@@ -55,7 +55,7 @@ def throttle():
     if wait>0:time.sleep(wait)
     last_req[0]=time.time()
 
-def get(path,p):
+def get(path,p={}):
     global stop
     if stop:return
     for i in range(5):
