@@ -255,14 +255,12 @@ def prepare(d,tf,sym):
     dist_base=DIST[tf]
     dist_cap=min(dist_base*max(ar,1.0), dist_base*1.5)
 
-    print(f"[diag] {sym} bs={bs} ar={ar:.2f} vr={vr:.2f} dist_long={(hi-p)/p:.4f} dist_short={(p-lo)/p:.4f} cap={dist_cap:.4f}")
-
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55:continue
         if tf=="15m":
-            if (side=="LONG" and bs<=0) or (side=="SHORT" and bs>=0):continue
+            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         else:
             if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
