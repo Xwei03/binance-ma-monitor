@@ -251,7 +251,6 @@ def prepare(d,tf,sym):
     lows=d.l.iloc[-6:-1].values;highs=d.h.iloc[-6:-1].values
     out=[]
 
-    # 动态距离窗口：ATR 压缩时不收紧，ATR 放大时放宽，上限为基准1.5倍
     dist_base=DIST[tf]
     dist_cap=min(dist_base*max(ar,1.0), dist_base*1.5)
 
@@ -259,13 +258,9 @@ def prepare(d,tf,sym):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=1.5 or ar>1.5 or body>=.55:continue
-        if tf=="15m":
-            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
-        else:
-            if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
-        trend=(e20.iloc[-1]>e60.iloc[-1] and p>e20.iloc[-1] and e20.iloc[-1]>e20.iloc[-4]) if side=="LONG" else (e20.iloc[-1]<e60.iloc[-1] and p<e20.iloc[-1] and e20.iloc[-1]<e20.iloc[-4])
         s=0
         s+=18 if ar<=.90 else 12 if ar<=1.0 else 6 if ar<=1.05 else 2
         if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 11 if dist<=.015 else 0
@@ -312,6 +307,7 @@ def prepare(d,tf,sym):
 
         need=75 if tf in ("15m","1H") else 72
         need_rr=1.8 if tf in ("15m","1H") else 2.0
+        print(f"[diag] {sym} {side} s={s} rr={rr:.2f} need={need}/{need_rr}")
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
