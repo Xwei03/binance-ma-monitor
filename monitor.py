@@ -251,9 +251,9 @@ def prepare(d,tf,sym):
     lows=d.l.iloc[-6:-1].values;highs=d.h.iloc[-6:-1].values
     out=[]
 
-    # 动态距离窗口：ATR 压缩时收紧，ATR 放大时放宽，上限为基准1.5倍
+    # 动态距离窗口：ATR 压缩时不收紧，ATR 放大时放宽，上限为基准1.5倍
     dist_base=DIST[tf]
-    dist_cap=min(dist_base*max(ar,0.6), dist_base*1.5)
+    dist_cap=min(dist_base*max(ar,1.0), dist_base*1.5)
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
