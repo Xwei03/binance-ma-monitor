@@ -24,6 +24,7 @@ DIST={"15m":.015,"1H":.025,"1D":.04}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
+MAX_CHASE={"15m":0.015,"1H":0.025,"1D":0.05}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -241,9 +242,21 @@ def prepare(d,tf,sym):
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
         s=0
         s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
-        if tf=="15m":s+=22 if dist<=.003 else 18 if dist<=.010 else 0
-        elif tf=="1H":s+=22 if dist<=.0075 else 16 if dist<=.012 else 2
-        else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 2
+        if tf=="15m":
+            if dist<0:s+=15
+            elif dist<=.003:s+=22
+            elif dist<=.010:s+=18
+            else:s+=0
+        elif tf=="1H":
+            if dist<0:s+=12
+            elif dist<=.0075:s+=22
+            elif dist<=.012:s+=16
+            else:s+=2
+        else:
+            if dist<0:s+=12
+            elif dist<=.0075:s+=22
+            elif dist<=.012:s+=16
+            else:s+=2
         s+=15
         s+=8
         s+=14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4
@@ -308,6 +321,8 @@ def normal(d,tf,sym):
     disc_s = 1.03 if tf=="1D" else 1.015
     gap_max = 0.06 if tf=="1D" else 0.04
     max_sl = MAX_SL.get(tf,0.025)
+    max_chase = MAX_CHASE.get(tf,0.025)
+    min_tp_dist = sl_mult * 1.5 * a
 
     def add(side,typ,sl,tp,need_rr):
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
@@ -326,14 +341,16 @@ def normal(d,tf,sym):
 
     if tf!="15m":
         if e20>e60>e120 and p>e200 and (p-e20)/p<gap_max:
-            tp_long=max(p+2*a, min(d.h.iloc[-301:-1].max()*disc_l, p+5*a))
+            wall=d.h.iloc[-301:-1].max()*disc_l
+            tp_long=max(min(wall,p+5*a), p+min_tp_dist)
             add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
         if e20<e60<e120 and p<e200 and (e20-p)/p<gap_max:
-            tp_short=min(p-2*a, max(d.l.iloc[-301:-1].min()*disc_s, p-5*a))
+            wall=d.l.iloc[-301:-1].min()*disc_s
+            tp_short=min(max(wall,p-5*a), p-min_tp_dist)
             add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi*(1+max_chase) and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.l.iloc[-2]-.5*a
         if p-sl>p*max_sl:sl=p-p*max_sl
         risk=p-sl
@@ -345,7 +362,7 @@ def normal(d,tf,sym):
                 if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo*(1-max_chase) and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.h.iloc[-2]+.5*a
         if sl-p>p*max_sl:sl=p+p*max_sl
         risk=sl-p
