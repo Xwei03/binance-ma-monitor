@@ -175,21 +175,22 @@ def daily_report(st):
     if n.hour!=0 or st.get("last_report")==today:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
-    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=0
+    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=tto=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")
             if not(tf=="15m" and t=="TREND")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
         sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
-        w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS");e=sum(1 for r in sub if r["result"]=="ERROR")
+        w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
+        e=sum(1 for r in sub if r["result"]=="ERROR");to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
-        t=w+l;tw+=w;tl+=l;te+=e
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 在追{p} 胜率{(w/t*100) if t else 0:.0f}%")
+        t=w+l;tw+=w;tl+=l;te+=e;tto+=to
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}%")
     tt=tw+tl
-    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}%")
+    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
-        st["last_report"]=today;print(f"DAILY_REPORT",tw,tl,te,len(lv))
+        st["last_report"]=today;print(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
 
 def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
@@ -325,12 +326,14 @@ def normal(d,tf,sym):
 
     if tf!="15m":
         if e20>e60>e120 and p>e200 and (p-e20)/p<gap_max:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-301:-1].max()*disc_l,p+5*a),1.5)
+            tp_long=max(p+2*a, min(d.h.iloc[-301:-1].max()*disc_l, p+5*a))
+            add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
         if e20<e60<e120 and p<e200 and (e20-p)/p<gap_max:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-301:-1].min()*disc_s,p-5*a),1.5)
+            tp_short=min(p-2*a, max(d.l.iloc[-301:-1].min()*disc_s, p-5*a))
+            add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.l.iloc[-2]-.5*a
         if p-sl>p*max_sl:sl=p-p*max_sl
         risk=p-sl
@@ -342,7 +345,7 @@ def normal(d,tf,sym):
                 if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.h.iloc[-2]+.5*a
         if sl-p>p*max_sl:sl=p+p*max_sl
         risk=sl-p
@@ -402,7 +405,8 @@ def check_live(st):
             continue
         if ht:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
         if hs:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
-        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):print("TIMEOUT",s["sym"],tf);continue
+        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
+            rec(st,s,"TIMEOUT");print("TIMEOUT",s["sym"],tf);continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
