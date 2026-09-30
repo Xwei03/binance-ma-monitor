@@ -23,6 +23,7 @@ TF={"15m":("15m",250,73,4),"1H":("1H",250,73,6),"1D":("1D",250,72,4)}
 DIST={"15m":.015,"1H":.025,"1D":.04}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
+MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -304,6 +305,7 @@ def normal(d,tf,sym):
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
     gap_max = 0.06 if tf=="1D" else 0.04
+    max_sl = MAX_SL.get(tf,0.025)
 
     def add(side,typ,sl,tp,need_rr):
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
@@ -322,26 +324,30 @@ def normal(d,tf,sym):
 
     if tf!="15m":
         if e20>e60>e120 and p>e200 and (p-e20)/p<gap_max:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*disc_l,p+5*a),1.5)
+            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-201:-1].max()*disc_l,p+5*a),1.5)
         if e20<e60<e120 and p<e200 and (e20-p)/p<gap_max:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*disc_s,p-5*a),1.5)
+            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-201:-1].min()*disc_s,p-5*a),1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.65 and body_prev<0.65:
-        sl=d.l.iloc[-2]-.5*a;risk=p-sl
+        sl=d.l.iloc[-2]-.5*a
+        if p-sl>p*max_sl:sl=p-p*max_sl
+        risk=p-sl
         if risk>0:
             base_tp=p+1.5*risk
-            pr=near_res(d,p,21)
+            pr=near_res(d,p)
             if pr is not None:
                 cd=pr*disc_l
                 if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3 and body<0.65 and body_prev<0.65:
-        sl=d.h.iloc[-2]+.5*a;risk=sl-p
+        sl=d.h.iloc[-2]+.5*a
+        if sl-p>p*max_sl:sl=p+p*max_sl
+        risk=sl-p
         if risk>0:
             base_tp=p-1.5*risk
-            sp=near_sup(d,p,21)
+            sp=near_sup(d,p)
             if sp is not None:
                 cd=sp*disc_s
                 if cd<p:add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
