@@ -40,7 +40,7 @@ def now_bj():return datetime.now(BJ_TZ)
 def tf_run(tf):
     n=datetime.now(timezone.utc)
     if tf=="15m":return True
-    if tf=="1H":return n.minute<20
+    if tf=="1H":return n.minute<5
     if tf=="1D":return n.hour==0 and 10<=n.minute<30
     return True
 
@@ -97,7 +97,8 @@ def candles(sym,bar,n=250):
         d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
-        if len(d)<10:return
+        if len(d)<11:return
+        d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
     except:return
 
