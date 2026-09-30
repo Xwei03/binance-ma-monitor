@@ -317,7 +317,7 @@ def normal(d,tf,sym):
         if typ=="TREND":
             v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
         else:
-            v=5 if vr>=4 else 15 if vr>=3 else 30 if vr>=2 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
+            v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
         if rr>=need_rr and s>=TF[tf][2]:
