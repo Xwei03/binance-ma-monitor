@@ -145,9 +145,11 @@ def too_soon(st,sym,tf,side,typ,d,bars):
 def mark(st,sym,tf,side,typ,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
 
-def rec(st,s,r):
-    st.setdefault("results",[]).append({"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
-                                        "type":s["type"],"result":r,"ts":int(time.time())})
+def rec(st,s,r,mfe=None):
+    e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
+       "type":s["type"],"result":r,"ts":int(time.time())}
+    if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
+    st.setdefault("results",[]).append(e)
 
 def post(txt):
     if not WEBHOOK:return False
@@ -192,6 +194,17 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
         st["last_report"]=today;print(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
+    losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
+    if losses:
+        batches=(len(losses)+29)//30
+        for i in range(0,len(losses),30):
+            chunk=losses[i:i+30]
+            M=[f"📋 止损明细（共{len(losses)}条，第{i//30+1}/{batches}批）："]
+            for r in chunk:
+                sym_s=r["sym"].replace("-USDT-SWAP","")
+                M.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}%")
+            post("\n".join(M))
+            time.sleep(.5)
 
 def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
@@ -410,6 +423,7 @@ def check_live(st):
         if len(f)==0:keep.append(s);continue
         hi=f.h.max();lo=f.l.min()
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
+        ent=s.get("entry",0) or 0
         hs=(lo<=sl) if side=="LONG" else (hi>=sl)
         ht=(hi>=tp) if side=="LONG" else (lo<=tp)
         if hs and ht:
@@ -417,11 +431,17 @@ def check_live(st):
             mark(st,s["sym"],tf,side,typ,d,"cool")
             if r is None:
                 rec(st,s,"ERROR");print("ERR",s["sym"],tf)
+            elif r=="LOSS":
+                mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+                rec(st,s,"LOSS",mfe);print("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}%")
             else:
-                rec(st,s,r);print("TPsub" if r=="WIN" else "SLsub",s["sym"],tf)
+                rec(st,s,"WIN");print("TPsub",s["sym"],tf)
             continue
         if ht:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
-        if hs:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS");print("SL",s["sym"],tf);continue
+        if hs:
+            mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe)
+            print("SL",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
             rec(st,s,"TIMEOUT");print("TIMEOUT",s["sym"],tf);continue
         keep.append(s)
