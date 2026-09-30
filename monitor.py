@@ -261,7 +261,7 @@ def prepare(d,tf,sym):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<=0 or dist>dist_cap:continue
         if tf=="15m" and dist<=0.001:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=2.0 or ar>1.3 or body>=.55:continue
+        if (p>=hi if side=="LONG" else p<=lo) or vr>=1.8 or ar>1.3 or body>=.55:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-4]):continue
@@ -272,7 +272,7 @@ def prepare(d,tf,sym):
         else:s+=22 if dist<=.0075 else 16 if dist<=.012 else 2
         s+=15
         s+=8
-        s+=14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4
+        s+=14 if (.7<=vr<1.8 and vr3>=1.0) else 8 if (.6<=vr<1.8 and vr3>=0.9) else 4
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
@@ -340,9 +340,11 @@ def normal(d,tf,sym):
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
-        s=(30 if vr>=2 else 15 if vr>=1.5 else 0)+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
-        if vr>=5:s-=20
-        elif vr>=3:s-=10
+        if typ=="TREND":
+            v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
+        else:
+            v=5 if vr>=4 else 15 if vr>=3 else 30 if vr>=2 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
+        s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if side=="LONG" and p>e20:s+=10
         if side=="SHORT" and p<e20:s+=10
         if rr>=need_rr and s>=TF[tf][2]:
@@ -356,7 +358,7 @@ def normal(d,tf,sym):
             add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-5*a),1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and 1.2<=vr<3.5 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.65 and body_prev<0.65:
         sl=d.l.iloc[-2]-.5*a;risk=p-sl
         if risk>0:
             base_tp=p+1.5*risk
@@ -367,7 +369,7 @@ def normal(d,tf,sym):
                     add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and 1.2<=vr<3.5 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and vr>=1.3 and body<0.65 and body_prev<0.65:
         sl=d.h.iloc[-2]+.5*a;risk=sl-p
         if risk>0:
             base_tp=p-1.5*risk
