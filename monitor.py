@@ -322,9 +322,9 @@ def normal(d,tf,sym):
 
     if tf!="15m":
         if e20>e60>e120 and p>e200 and (p-e20)/p<gap_max:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*0.985,p+5*a),1.5)
+            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-61:-1].max()*disc_l,p+5*a),1.5)
         if e20<e60<e120 and p<e200 and (e20-p)/p<gap_max:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*1.015,p-5*a),1.5)
+            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-61:-1].min()*disc_s,p-5*a),1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.65 and body_prev<0.65:
