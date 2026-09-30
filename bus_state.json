@@ -1,1 +1,1 @@
-{"sent": {}, "cool": {}, "live": [], "results": [], "last_report": ""}
+{"sent": {"AKE-USDT-SWAP|1H|SHORT|TREND": 1790755200000}, "cool": {}, "live": [{"sym": "AKE-USDT-SWAP", "tf": "1H", "dir": "SHORT", "type": "TREND", "entry": 0.03464, "sl": 0.036302857142857144, "tp": 0.030482857142857138, "score": 80, "rr": 2.499999999999996, "sent_ts": 1790755200000}], "results": [], "last_report": ""}
