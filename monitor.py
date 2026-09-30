@@ -19,7 +19,7 @@ def hdr():
             "Accept-Language":"zh-CN,zh;q=0.9,en;q=0.8","Connection":"keep-alive",
             "Referer":"https://www.okx.com/"}
 
-TF={"15m":("15m",250,73,4),"1H":("1H",250,73,6),"1D":("1D",250,72,4)}
+TF={"15m":("15m",300,73,4),"1H":("1H",300,73,6),"1D":("1D",300,72,4)}
 DIST={"15m":.015,"1H":.025,"1D":.04}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
@@ -88,7 +88,7 @@ def coins():
     if r:print(f"[币种] ≥{MIN_VOL/1e8:.2f}亿的共{len(valid)}个，取{len(r)}个")
     return r
 
-def candles(sym,bar,n=250):
+def candles(sym,bar,n=300):
     k=(sym,bar,n)
     if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
     x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
@@ -108,17 +108,17 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def near_res(d,p,look=201):
+def near_res(d,p,look=301):
     h=d.h.iloc[-look:-1];a=h[h>p]
     return float(a.min()) if len(a) else None
 
-def near_sup(d,p,look=201):
+def near_sup(d,p,look=301):
     l=d.l.iloc[-look:-1];b=l[l<p]
     return float(b.max()) if len(b) else None
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
-    d=candles("BTC-USDT-SWAP",bar,220)
+    d=candles("BTC-USDT-SWAP",bar,300)
     if d is None:btc_cache[bar]=0;return 0
     p=d.c.iloc[-1];e20=ema(d.c,20).iloc[-1];e60=ema(d.c,60).iloc[-1]
     v=15 if (e20>e60 and p>e20) else -15 if (e20<e60 and p<e20) else 0
@@ -325,9 +325,9 @@ def normal(d,tf,sym):
 
     if tf!="15m":
         if e20>e60>e120 and p>e200 and (p-e20)/p<gap_max:
-            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-201:-1].max()*disc_l,p+5*a),1.5)
+            add("LONG","TREND",p-sl_mult*a,min(d.h.iloc[-301:-1].max()*disc_l,p+5*a),1.5)
         if e20<e60<e120 and p<e200 and (e20-p)/p<gap_max:
-            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-201:-1].min()*disc_s,p-5*a),1.5)
+            add("SHORT","TREND",p+sl_mult*a,max(d.l.iloc[-301:-1].min()*disc_s,p-5*a),1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and vr>=1.3 and body<0.65 and body_prev<0.65:
@@ -383,7 +383,7 @@ def check_live(st):
     for s in st.get("live") or []:
         tf=s.get("tf")
         if tf not in TF:continue
-        d=candles(s["sym"],TF[tf][0],250)
+        d=candles(s["sym"],TF[tf][0],300)
         if d is None:keep.append(s);continue
         ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])
         f=d[d.ts>ts0]
