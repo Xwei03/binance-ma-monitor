@@ -232,8 +232,8 @@ def prepare(d,tf,sym):
 
     for side in ("LONG","SHORT"):
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        if dist<=0 or dist>dist_cap:continue
-        if tf=="15m" and dist<=0.001:continue
+        if dist<-0.005 or dist>dist_cap:continue
+        if tf=="15m" and 0<dist<=0.001:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=2.0 or ar>1.3 or body>=.55:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-4]):continue
