@@ -180,7 +180,8 @@ def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
     if n.hour!=0 or st.get("last_report")==today:return
     cut=int(time.time())-86400
-    rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
+    all_rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
+    rs=[r for r in all_rs if r.get("ver")==CODE_VER]
     L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")
             if not(tf=="15m" and t=="TREND")]
@@ -190,18 +191,22 @@ def daily_report(st):
         w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
         e=sum(1 for r in sub if r["result"]=="ERROR");to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
-        loss_mfe=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
-        mfe_avg=sum(loss_mfe)/len(loss_mfe) if loss_mfe else 0
+        wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
+        lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
+        tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
+        wa=sum(wm)/len(wm) if wm else 0;la=sum(lm)/len(lm) if lm else 0;ta=sum(tm)/len(tm) if tm else 0
         t=w+l;tw+=w;tl+=l;te+=e;tto+=to
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% 止损MFE均{mfe_avg:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}% 超{ta:.2f}%")
     tt=tw+tl
-    all_loss_mfe=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
-    all_mfe=sum(all_loss_mfe)/len(all_loss_mfe) if all_loss_mfe else 0
-    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% 止损MFE均{all_mfe:.2f}%")
+    allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
+    alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
+    alltm=[r["mfe"] for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
+    wa=sum(allwm)/len(allwm) if allwm else 0;la=sum(alllm)/len(alllm) if alllm else 0;ta=sum(alltm)/len(alltm) if alltm else 0
+    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}% 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
         st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
-    losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
+    losses=[r for r in all_rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-x["mfe"])
     if losses:
         batches=(len(losses)+29)//30
