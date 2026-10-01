@@ -2,6 +2,7 @@
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
+CODE_VER="v1.0.4"
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 PROXY=os.getenv("OKX_PROXY","")
@@ -19,12 +20,16 @@ def hdr():
             "Accept-Language":"zh-CN,zh;q=0.9,en;q=0.8","Connection":"keep-alive",
             "Referer":"https://www.okx.com/"}
 
+def now_bj():return datetime.now(BJ_TZ)
+
+def log(*args):print(*args)
+
 TF={"15m":("15m",300,73,4),"1H":("1H",300,73,6),"1D":("1D",300,72,4)}
 DIST={"15m":.015,"1H":.025,"1D":.04}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
-CHASE_ATR={"15m":2.0,"1H":2.5,"1D":3.0}
+CHASE_ATR={"15m":2.0,"1H":2.5,"1D":1.5}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -35,8 +40,6 @@ TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
-
-def now_bj():return datetime.now(BJ_TZ)
 
 def tf_run(tf):
     n=datetime.now(timezone.utc)
@@ -61,20 +64,20 @@ def get(path,p):
             if PROXY:kw["proxies"]={"http":PROXY,"https":PROXY}
             r=requests.get(BASE+path,**kw)
             if r.status_code in (403,451):
-                print(f"[OKX] HTTP {r.status_code} 停止本轮");stop=True;return
+                log(f"[OKX] HTTP {r.status_code} 停止本轮");stop=True;return
             if r.status_code==418:
-                print("[OKX] 418 被封 等60s");time.sleep(60);continue
+                log("[OKX] 418 被封 等60s");time.sleep(60);continue
             if r.status_code==429 or r.status_code>=500:
                 w=min(3*2**i,30)+random.random()*2
-                print(f"[OKX] HTTP {r.status_code} 等{w:.1f}s");time.sleep(w);continue
+                log(f"[OKX] HTTP {r.status_code} 等{w:.1f}s");time.sleep(w);continue
             x=r.json()
             if x.get("code")=="0":return x.get("data",[])
             if x.get("code")=="50011":
                 w=min(3*2**i,30)+random.random()*2
-                print(f"[OKX] 50011 等{w:.1f}s");time.sleep(w);continue
+                log(f"[OKX] 50011 等{w:.1f}s");time.sleep(w);continue
             return
         except Exception as e:
-            print(f"[OKX] {type(e).__name__}");time.sleep(min(2**i*2,20))
+            log(f"[OKX] {type(e).__name__}");time.sleep(min(2**i*2,20))
 
 def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
@@ -86,7 +89,7 @@ def coins():
         v=float(x.get("volCcy24h",0) or 0);p=float(x.get("last",0) or 0);vol[x["instId"]]=v*p
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
     r=sorted(valid,key=lambda x:vol.get(x,0),reverse=True)[:150]
-    if r:print(f"[币种] ≥{MIN_VOL/1e8:.2f}亿的共{len(valid)}个，取{len(r)}个")
+    if r:log(f"[币种] ≥{MIN_VOL/1e8:.2f}亿的共{len(valid)}个，取{len(r)}个")
     return r
 
 def candles(sym,bar,n=300):
@@ -147,7 +150,7 @@ def mark(st,sym,tf,side,typ,d,where="sent"):
 
 def rec(st,s,r,mfe=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
-       "type":s["type"],"result":r,"ts":int(time.time())}
+       "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER}
     if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
     st.setdefault("results",[]).append(e)
 
@@ -160,10 +163,10 @@ def post(txt):
             except:res={}
             if r.status_code==200 and res.get("code")==0:return True
             if r.status_code==429:
-                print(f"[飞书] 限流 重试{i+1}/3");time.sleep(min(5*2**i,30));continue
-            print(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
+                log(f"[飞书] 限流 重试{i+1}/3");time.sleep(min(5*2**i,30));continue
+            log(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
         except Exception as e:
-            print(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
+            log(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
     return False
 
 def clean(st):
@@ -178,7 +181,7 @@ def daily_report(st):
     if n.hour!=0 or st.get("last_report")==today:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
-    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=tto=0
+    L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")
             if not(tf=="15m" and t=="TREND")]
     lv=st.get("live",[])
@@ -187,19 +190,24 @@ def daily_report(st):
         w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
         e=sum(1 for r in sub if r["result"]=="ERROR");to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
+        loss_mfe=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
+        mfe_avg=sum(loss_mfe)/len(loss_mfe) if loss_mfe else 0
         t=w+l;tw+=w;tl+=l;te+=e;tto+=to
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}%")
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% 止损MFE均{mfe_avg:.2f}%")
     tt=tw+tl
-    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}%")
+    all_loss_mfe=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
+    all_mfe=sum(all_loss_mfe)/len(all_loss_mfe) if all_loss_mfe else 0
+    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% 止损MFE均{all_mfe:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
-        st["last_report"]=today;print(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
+        st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
+    losses.sort(key=lambda x:-x["mfe"])
     if losses:
         batches=(len(losses)+29)//30
         for i in range(0,len(losses),30):
             chunk=losses[i:i+30]
-            M=[f"📋 止损明细（共{len(losses)}条，第{i//30+1}/{batches}批）："]
+            M=[f"📋 止损明细（共{len(losses)}条，按MFE降序，第{i//30+1}/{batches}批）："]
             for r in chunk:
                 sym_s=r["sym"].replace("-USDT-SWAP","")
                 M.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}%")
@@ -322,8 +330,8 @@ def prepare(d,tf,sym):
 def normal(d,tf,sym):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
-    E=[ema(d.c,n).iloc[-1] for n in (20,60,120,200)]
-    e20,e60,e120,e200=E
+    e20s=ema(d.c,20);e60s=ema(d.c,60);e200s=ema(d.c,200)
+    e20=e20s.iloc[-1];e60=e60s.iloc[-1];e200=e200s.iloc[-1]
     a=atr(d).iloc[-1];aa=atr(d).iloc[-6:-1].mean()
     if pd.isna(a) or pd.isna(aa):return
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
@@ -337,7 +345,7 @@ def normal(d,tf,sym):
     gap_max = 0.06 if tf=="1D" else 0.04
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
-    min_tp_dist = sl_mult * 1.5 * a
+    min_tp_dist = sl_mult * 1.0 * a
 
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and p<=d.o.iloc[-1]:return
@@ -357,12 +365,12 @@ def normal(d,tf,sym):
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60 and e20.iloc[-1]>e20.iloc[-4] and p>e200 and (p-e20)/p<gap_max:
+        if e20>e60 and e20s.iloc[-1]>e20s.iloc[-4] and p>e200 and (p-e20)/p<gap_max:
             wall=d.h.iloc[-301:-1].max()*disc_l
             if wall - p >= min_tp_dist:
                 tp_long=max(min(wall,p+5*a), p+min_tp_dist)
                 add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
-        if e20<e60 and e20.iloc[-1]<e20.iloc[-4] and p<e200 and (e20-p)/p<gap_max:
+        if e20<e60 and e20s.iloc[-1]<e20s.iloc[-4] and p<e200 and (e20-p)/p<gap_max:
             wall=d.l.iloc[-301:-1].min()*disc_s
             if p - wall >= min_tp_dist:
                 tp_short=min(max(wall,p-5*a), p-min_tp_dist)
@@ -404,7 +412,7 @@ def signal(d,tf,sym):
 def send_signal(st,s):
     t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
     stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="15m") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
-    txt=(f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
+    txt=(f"宝宝巴士🚌上车就赚 {CODE_VER}\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
          f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
          f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
          f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -413,7 +421,7 @@ def send_signal(st,s):
         st.setdefault("sent",{})[key]=int(s["sent_ts"])
         if key not in {sdk(x.get("sym",""),x.get("tf",""),x.get("dir",""),x.get("type","")) for x in st.get("live",[])}:
             st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
-        print("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
+        log("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
         return True
     return False
 
@@ -432,24 +440,25 @@ def check_live(st):
         ent=s.get("entry",0) or 0
         hs=(lo<=sl) if side=="LONG" else (hi>=sl)
         ht=(hi>=tp) if side=="LONG" else (lo<=tp)
+        mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if hs and ht:
             r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
             mark(st,s["sym"],tf,side,typ,d,"cool")
             if r is None:
-                rec(st,s,"ERROR");print("ERR",s["sym"],tf)
+                rec(st,s,"ERROR",mfe);log("ERR",s["sym"],tf,f"MFE={mfe*100:.2f}%")
             elif r=="LOSS":
-                mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
-                rec(st,s,"LOSS",mfe);print("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}%")
+                rec(st,s,"LOSS",mfe);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}%")
             else:
-                rec(st,s,"WIN");print("TPsub",s["sym"],tf)
+                rec(st,s,"WIN",mfe);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}%")
             continue
-        if ht:mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN");print("TP",s["sym"],tf);continue
+        if ht:
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe)
+            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
         if hs:
-            mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe)
-            print("SL",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
+            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
-            rec(st,s,"TIMEOUT");print("TIMEOUT",s["sym"],tf);continue
+            rec(st,s,"TIMEOUT",mfe);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
@@ -457,34 +466,38 @@ def scan():
     btc_cache.clear()
     st=load_state();clean(st);daily_report(st)
     ss=coins()
-    if not ss:print("no coins");save_state(st);return
+    if not ss:log("no coins");save_state(st);return
     check_live(st)
 
     for tf,(bar,n,_,_) in TF.items():
         if stop:break
         if not tf_run(tf):
-            print(f"[{tf}] 跳过");continue
-        print(f"[扫描] {tf}")
+            log(f"[{tf}] 跳过");continue
+        log(f"[扫描] {tf}")
         hits=[]
         for sym in ss:
             if stop:break
-            dd=candles(sym,bar,n)
-            s=signal(dd,tf,sym)
-            if not s:continue
-            if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
-            key=sdk(s["sym"],tf,s["dir"],s["type"])
-            if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
-            s["sent_ts"]=int(dd.ts.iloc[-1])
-            hits.append(s)
+            try:
+                dd=candles(sym,bar,n)
+                s=signal(dd,tf,sym)
+                if not s:continue
+                if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
+                key=sdk(s["sym"],tf,s["dir"],s["type"])
+                if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
+                s["sent_ts"]=int(dd.ts.iloc[-1])
+                hits.append(s)
+            except Exception as e:
+                log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
+                continue
         hits.sort(key=lambda x:-x["score"])
         cnt=0
         for s in hits[:MAX_SEND_PER_SCAN]:
             if send_signal(st,s):cnt+=1
             time.sleep(.3)
         save_state(st)
-        print(f"[{tf}] hits {len(hits)} sent {cnt}")
+        log(f"[{tf}] hits {len(hits)} sent {cnt}")
 
-    print(now_bj().strftime("%H:%M:%S"),"完成")
+    log(now_bj().strftime("%H:%M:%S"),"完成")
 
 if __name__=="__main__":
     scan()
