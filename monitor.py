@@ -24,7 +24,7 @@ DIST={"15m":.015,"1H":.025,"1D":.04}
 MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
-MAX_CHASE={"15m":0.015,"1H":0.025,"1D":0.05}
+CHASE_ATR={"15m":2.0,"1H":2.5,"1D":3.0}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -334,7 +334,7 @@ def normal(d,tf,sym):
     disc_s = 1.03 if tf=="1D" else 1.015
     gap_max = 0.06 if tf=="1D" else 0.04
     max_sl = MAX_SL.get(tf,0.025)
-    max_chase = MAX_CHASE.get(tf,0.025)
+    chase_atr = CHASE_ATR.get(tf,2.5)
     min_tp_dist = sl_mult * 1.5 * a
 
     def add(side,typ,sl,tp,need_rr):
@@ -363,7 +363,7 @@ def normal(d,tf,sym):
             add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi*(1+max_chase) and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.l.iloc[-2]-.5*a
         if p-sl>p*max_sl:sl=p-p*max_sl
         risk=p-sl
@@ -375,7 +375,7 @@ def normal(d,tf,sym):
                 if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo*(1-max_chase) and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.h.iloc[-2]+.5*a
         if sl-p>p*max_sl:sl=p+p*max_sl
         risk=sl-p
