@@ -180,8 +180,7 @@ def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
     if n.hour!=0 or st.get("last_report")==today:return
     cut=int(time.time())-86400
-    all_rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
-    rs=[r for r in all_rs if r.get("ver")==CODE_VER]
+    rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")
             if not(tf=="15m" and t=="TREND")]
@@ -206,7 +205,7 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     if post("\n".join(L)):
         st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
-    losses=[r for r in all_rs if r["result"]=="LOSS" and "mfe" in r]
+    losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-x["mfe"])
     if losses:
         batches=(len(losses)+29)//30
