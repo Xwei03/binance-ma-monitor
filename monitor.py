@@ -148,10 +148,11 @@ def too_soon(st,sym,tf,side,typ,d,bars):
 def mark(st,sym,tf,side,typ,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
 
-def rec(st,s,r,mfe=None):
+def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
        "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER}
     if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
+    if mfe_pct is not None:e["mfe_pct"]=round(float(mfe_pct)*100,1)
     st.setdefault("results",[]).append(e)
 
 def post(txt):
@@ -205,24 +206,32 @@ def daily_report(st):
         wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
         lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
         tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
-        wa=sum(wm)/len(wm) if wm else 0;la=sum(lm)/len(lm) if lm else 0;ta=sum(tm)/len(tm) if tm else 0
+        lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
+        wa=sum(wm)/len(wm) if wm else 0
+        la=sum(lm)/len(lm) if lm else 0
+        lpa=sum(lmp)/len(lmp) if lmp else 0
+        ta=sum(tm)/len(tm) if tm else 0
         t=w+l;tw+=w;tl+=l;te+=e;tto+=to
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}% 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     tt=tw+tl
     allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
     alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
     alltm=[r["mfe"] for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
-    wa=sum(allwm)/len(allwm) if allwm else 0;la=sum(alllm)/len(alllm) if alllm else 0;ta=sum(alltm)/len(alltm) if alltm else 0
-    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}% 超{ta:.2f}%")
+    alllmp=[r["mfe_pct"] for r in rs if r["result"]=="LOSS" and "mfe_pct" in r]
+    wa=sum(allwm)/len(allwm) if allwm else 0
+    la=sum(alllm)/len(alllm) if alllm else 0
+    lpa=sum(alllmp)/len(alllmp) if alllmp else 0
+    ta=sum(alltm)/len(alltm) if alltm else 0
+    L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
-    losses.sort(key=lambda x:-x["mfe"])
+    losses.sort(key=lambda x:-(x.get("mfe_pct",0)))
     if losses:
         L.append("")
-        L.append(f"📋 止损明细（{len(losses)}条，按MFE降序）：")
+        L.append(f"📋 止损明细（{len(losses)}条，按止盈进度降序，止盈=100%）：")
         for r in losses:
             sym_s=r["sym"].replace("-USDT-SWAP","")
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}%")
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%")
     post_long(L)
     st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
 
@@ -450,27 +459,36 @@ def check_live(st):
         hi=f.h.max();lo=f.l.min()
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0
+        tp_v=s.get("tp",0) or 0
         hs=(lo<=sl) if side=="LONG" else (hi>=sl)
         ht=(hi>=tp) if side=="LONG" else (lo<=tp)
         mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+        if ent and tp_v:
+            if side=="LONG":
+                tpd=tp_v-ent;mfp=hi-ent
+            else:
+                tpd=ent-tp_v;mfp=ent-lo
+            mfe_pct=mfp/tpd if tpd>0 else 0
+        else:
+            mfe_pct=0
         if hs and ht:
             r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
             mark(st,s["sym"],tf,side,typ,d,"cool")
             if r is None:
-                rec(st,s,"ERROR",mfe);log("ERR",s["sym"],tf,f"MFE={mfe*100:.2f}%")
+                rec(st,s,"ERROR",mfe,mfe_pct);log("ERR",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%")
             elif r=="LOSS":
-                rec(st,s,"LOSS",mfe);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}%")
+                rec(st,s,"LOSS",mfe,mfe_pct);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%")
             else:
-                rec(st,s,"WIN",mfe);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}%")
+                rec(st,s,"WIN",mfe,mfe_pct);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%")
             continue
         if ht:
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe)
-            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
+            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%");continue
         if hs:
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe)
-            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,mfe_pct)
+            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%");continue
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
-            rec(st,s,"TIMEOUT",mfe);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
+            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%");continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
