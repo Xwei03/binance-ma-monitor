@@ -31,7 +31,7 @@ TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
 CHASE_ATR={"15m":2.0,"1H":2.5,"1D":1.5}
 GAP_ATR=2.5
-GAP_CAP={"15m":0.04,"1H":0.04,"1D":0.10}
+GAP_CAP={"15m":0.02,"1H":0.04,"1D":0.10}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -198,8 +198,7 @@ def daily_report(st):
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
-    combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")
-            if not(tf=="15m" and t=="TREND")]
+    combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
         sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
@@ -390,17 +389,16 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
-    if tf!="15m":
-        if e20>e60*1.002 and e60>e120*1.002 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
-            wall=d.h.iloc[-301:-1].max()*disc_l
-            if wall - p >= min_tp_dist:
-                tp_long=max(min(wall,p+5*a), p+min_tp_dist)
-                add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
-        if e20<e60*0.998 and e60<e120*0.998 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-            wall=d.l.iloc[-301:-1].min()*disc_s
-            if p - wall >= min_tp_dist:
-                tp_short=min(max(wall,p-5*a), p-min_tp_dist)
-                add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
+    if e20>e60*1.002 and e60>e120*1.002 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+        wall=d.h.iloc[-301:-1].max()*disc_l
+        if wall - p >= min_tp_dist:
+            tp_long=max(min(wall,p+5*a), p+min_tp_dist)
+            add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
+    if e20<e60*0.998 and e60<e120*0.998 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+        wall=d.l.iloc[-301:-1].min()*disc_s
+        if p - wall >= min_tp_dist:
+            tp_short=min(max(wall,p-5*a), p-min_tp_dist)
+            add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -465,9 +463,9 @@ def check_live(st):
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0
         tp_v=s.get("tp",0) or 0
-        hs=(lo<=sl) if side=="LONG" else (hi>=sl)
-        ht=(hi>=tp) if side=="LONG" else (lo<=tp)
-        mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+        hs=(lo<=slm) if side=="LONG"fe else (hi>=sl)
+       ,m ht=(hi>=tpfe) if side=="LONG" else_p (lo<=tp)
+        mfe=(cthi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if ent and tp_v:
             if side=="LONG":
                 tpd=tp_v-ent;mfp=hi-ent
@@ -484,7 +482,7 @@ def check_live(st):
             elif r=="LOSS":
                 rec(st,s,"LOSS",mfe,mfe_pct);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             else:
-                rec(st,s,"WIN",mfe,mfe_pct);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
+                rec(st,s,"WIN",);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             continue
         if ht:
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
