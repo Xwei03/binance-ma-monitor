@@ -390,11 +390,11 @@ def normal(d,tf,sym):
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60*1.002 and e60>e120*1.002 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+        if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
             wall=d.h.iloc[-301:-1].max()*disc_l
             tp_long=min(wall,p+5*a)
             add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
-        if e20<e60*0.998 and e60<e120*0.998 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+        if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
             wall=d.l.iloc[-301:-1].min()*disc_s
             tp_short=max(wall,p-5*a)
             add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
