@@ -30,6 +30,8 @@ MAX_HOLD={"15m":100,"1H":100,"1D":30}
 TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
 MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
 CHASE_ATR={"15m":2.0,"1H":2.5,"1D":1.5}
+GAP_ATR=2.5
+GAP_CAP={"15m":0.04,"1H":0.04,"1D":0.15}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -366,7 +368,7 @@ def normal(d,tf,sym):
 
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
-    gap_max = 0.06 if tf=="1D" else 0.04
+    gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
     min_tp_dist = sl_mult * 1.0 * a
