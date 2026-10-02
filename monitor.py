@@ -354,8 +354,8 @@ def prepare(d,tf,sym):
 def normal(d,tf,sym):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
-    e20s=ema(d.c,20);e60s=ema(d.c,60);e200s=ema(d.c,200)
-    e20=e20s.iloc[-1];e60=e60s.iloc[-1];e200=e200s.iloc[-1]
+    e20s=ema(d.c,20);e60s=ema(d.c,60)
+    e20=e20s.iloc[-1];e60=e60s.iloc[-1]
     a=atr(d).iloc[-1];aa=atr(d).iloc[-6:-1].mean()
     if pd.isna(a) or pd.isna(aa):return
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
@@ -389,12 +389,12 @@ def normal(d,tf,sym):
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     if tf!="15m":
-        if e20>e60 and e20s.iloc[-1]>e20s.iloc[-4] and p>e200 and (p-e20)/p<gap_max:
+        if e20>e60 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
             wall=d.h.iloc[-301:-1].max()*disc_l
             if wall - p >= min_tp_dist:
                 tp_long=max(min(wall,p+5*a), p+min_tp_dist)
                 add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
-        if e20<e60 and e20s.iloc[-1]<e20s.iloc[-4] and p<e200 and (e20-p)/p<gap_max:
+        if e20<e60 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
             wall=d.l.iloc[-301:-1].min()*disc_s
             if p - wall >= min_tp_dist:
                 tp_short=min(max(wall,p-5*a), p-min_tp_dist)
