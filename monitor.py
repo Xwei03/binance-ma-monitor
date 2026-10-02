@@ -152,7 +152,7 @@ def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
        "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER}
     if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
-    if mfe_pct is not None:e["mfe_pct"]=round(float(mfe_pct)*100,1)
+    if mfe_pct is not None:e["mfe_pct"]=round(min(float(mfe_pct),1.0)*100,1)
     st.setdefault("results",[]).append(e)
 
 def post(txt):
@@ -171,16 +171,17 @@ def post(txt):
     return False
 
 def post_long(lines,max_len=3000,gap=1.2):
-    cur=[];cur_len=0
+    cur=[];cur_len=0;ok=True
     for line in lines:
         l=len(line)+1
         if cur_len+l>max_len and cur:
-            post("\n".join(cur))
+            if not post("\n".join(cur)):ok=False
             time.sleep(gap)
             cur=[];cur_len=0
         cur.append(line);cur_len+=l
     if cur:
-        post("\n".join(cur))
+        if not post("\n".join(cur)):ok=False
+    return ok
 
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
@@ -232,8 +233,10 @@ def daily_report(st):
         for r in losses:
             sym_s=r["sym"].replace("-USDT-SWAP","")
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%")
-    post_long(L)
-    st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
+    if post_long(L):
+        st["last_report"]=today;log("DAILY_REPORT",tw,tl,te,tto,len(lv))
+    else:
+        log("DAILY_REPORT 发送失败，不更新 last_report，下轮重试")
 
 def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
@@ -380,7 +383,7 @@ def normal(d,tf,sym):
         else:
             v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
-        if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
+        if (side=="LONG" and_t p>e20) or (pside=="SHORT" and p<e20),):s+=10
         if rr>=need_rr and s>=TF[tf][2]:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
@@ -407,7 +410,7 @@ def normal(d,tf,sym):
             pr=near_res(d,p)
             if pr is not None:
                 cd=pr*disc_l
-                if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
+                if cd>p:add("LONG","BREAKOUT",sl,min(cd,base1.5)
             else:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -475,20 +478,20 @@ def check_live(st):
             r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
             mark(st,s["sym"],tf,side,typ,d,"cool")
             if r is None:
-                rec(st,s,"ERROR",mfe,mfe_pct);log("ERR",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%")
+                rec(st,s,"ERROR",mfe,mfe_pct);log("ERR",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             elif r=="LOSS":
-                rec(st,s,"LOSS",mfe,mfe_pct);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%")
+                rec(st,s,"LOSS",mfe,mfe_pct);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             else:
-                rec(st,s,"WIN",mfe,mfe_pct);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%")
+                rec(st,s,"WIN",mfe,mfe_pct);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             continue
         if ht:
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
-            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%");continue
+            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         if hs:
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,mfe_pct)
-            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%");continue
+            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
-            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{mfe_pct*100:.0f}%");continue
+            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
