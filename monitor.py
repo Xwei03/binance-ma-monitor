@@ -169,6 +169,18 @@ def post(txt):
             log(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
     return False
 
+def post_long(lines,max_len=3000,gap=1.2):
+    cur=[];cur_len=0
+    for line in lines:
+        l=len(line)+1
+        if cur_len+l>max_len and cur:
+            post("\n".join(cur))
+            time.sleep(gap)
+            cur=[];cur_len=0
+        cur.append(line);cur_len+=l
+    if cur:
+        post("\n".join(cur))
+
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
@@ -203,20 +215,16 @@ def daily_report(st):
     wa=sum(allwm)/len(allwm) if allwm else 0;la=sum(alllm)/len(alllm) if alllm else 0;ta=sum(alltm)/len(alltm) if alltm else 0
     L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}% 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
-    if post("\n".join(L)):
-        st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-x["mfe"])
     if losses:
-        batches=(len(losses)+29)//30
-        for i in range(0,len(losses),30):
-            chunk=losses[i:i+30]
-            M=[f"📋 止损明细（共{len(losses)}条，按MFE降序，第{i//30+1}/{batches}批）："]
-            for r in chunk:
-                sym_s=r["sym"].replace("-USDT-SWAP","")
-                M.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}%")
-            post("\n".join(M))
-            time.sleep(.5)
+        L.append("")
+        L.append(f"📋 止损明细（{len(losses)}条，按MFE降序）：")
+        for r in losses:
+            sym_s=r["sym"].replace("-USDT-SWAP","")
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}%")
+    post_long(L)
+    st["last_report"]=today;log(f"DAILY_REPORT",tw,tl,te,tto,len(lv))
 
 def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
