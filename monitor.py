@@ -463,9 +463,9 @@ def check_live(st):
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0
         tp_v=s.get("tp",0) or 0
-        hs=(lo<=slm) if side=="LONG"fe else (hi>=sl)
-       ,m ht=(hi>=tpfe) if side=="LONG" else_p (lo<=tp)
-        mfe=(cthi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+        hs=(lo<=sl) if side=="LONG" else (hi>=sl)
+        ht=(hi>=tp) if side=="LONG" else (lo<=tp)
+        mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if ent and tp_v:
             if side=="LONG":
                 tpd=tp_v-ent;mfp=hi-ent
@@ -482,7 +482,7 @@ def check_live(st):
             elif r=="LOSS":
                 rec(st,s,"LOSS",mfe,mfe_pct);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             else:
-                rec(st,s,"WIN",);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
+                rec(st,s,"WIN",mfe,mfe_pct);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             continue
         if ht:
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
