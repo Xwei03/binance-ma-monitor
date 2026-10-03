@@ -276,8 +276,8 @@ def prepare(d,tf,sym):
 
     dist_base=DIST[tf]
     dist_cap=min(dist_base*max(ar,1.0), dist_base*2.0)
-    disc_l = 0.97 if tf=="1D" else 0.985
-    disc_s = 1.03 if tf=="1D" else 1.015
+    disc_l = 0.97 if tf=="1D" else 0.98
+    disc_s = 1.03 if tf=="1D" else 1.02
 
     for side in ("LONG","SHORT"):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
@@ -366,8 +366,8 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
 
-    disc_l = 0.97 if tf=="1D" else 0.985
-    disc_s = 1.03 if tf=="1D" else 1.015
+    disc_l = 0.97 if tf=="1D" else 0.98
+    disc_s = 1.03 if tf=="1D" else 1.02
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
@@ -389,15 +389,17 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
+    tr_rr = 1.5
+
     if tf!="15m":
         if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
             wall=d.h.iloc[-301:-1].max()*disc_l
             tp_long=min(wall,p+5*a)
-            add("LONG","TREND",p-sl_mult*a,tp_long,1.5)
+            add("LONG","TREND",p-sl_mult*a,tp_long,tr_rr)
         if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
             wall=d.l.iloc[-301:-1].min()*disc_s
             tp_short=max(wall,p-5*a)
-            add("SHORT","TREND",p+sl_mult*a,tp_short,1.5)
+            add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
