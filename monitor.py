@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (15m/1H/1D)
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D)
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -24,19 +24,19 @@ def now_bj():return datetime.now(BJ_TZ)
 
 def log(*args):print(*args)
 
-TF={"15m":("15m",300,73,4),"1H":("1H",300,73,6),"1D":("1D",300,72,4)}
-DIST={"15m":.015,"1H":.025,"1D":.04}
-MAX_HOLD={"15m":100,"1H":100,"1D":30}
-TREND_SL={"15m":1.5,"1H":2.0,"1D":2.5}
-MAX_SL={"15m":0.02,"1H":0.025,"1D":0.05}
-CHASE_ATR={"15m":2.0,"1H":2.5,"1D":1.5}
+TF={"1H":("1H",300,73,6),"1D":("1D",300,72,4)}
+DIST={"1H":.025,"1D":.04}
+MAX_HOLD={"1H":100,"1D":30}
+TREND_SL={"1H":2.0,"1D":2.5}
+MAX_SL={"1H":0.025,"1D":0.05}
+CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR=2.5
-GAP_CAP={"15m":0.02,"1H":0.04,"1D":0.10}
+GAP_CAP={"1H":0.04,"1D":0.10}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
 MIN_VOL=10000000
-CN={"15m":"15分钟","1H":"1小时","1D":"1天"}
+CN={"1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
@@ -45,7 +45,6 @@ last_req=[0.0]
 
 def tf_run(tf):
     n=datetime.now(timezone.utc)
-    if tf=="15m":return True
     if tf=="1H":return n.minute<5
     if tf=="1D":return n.hour==0 and 10<=n.minute<30
     return True
@@ -198,8 +197,7 @@ def daily_report(st):
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
-    combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("15m","1H","1D") for t in ("PREPARE","TREND","BREAKOUT")
-            if not(tf=="15m" and t=="TREND")]
+    combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
         sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
@@ -284,19 +282,13 @@ def prepare(d,tf,sym):
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         dist=(hi-p)/p if side=="LONG" else (p-lo)/p
         if dist<-0.010 or dist>dist_cap:continue
-        if tf=="15m" and 0<dist<=0.001:continue
         if (p>=hi if side=="LONG" else p<=lo) or vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6]):continue
         s=0
         s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
-        if tf=="15m":
-            if dist<0:s+=15
-            elif dist<=.003:s+=22
-            elif dist<=.010:s+=18
-            else:s+=0
-        elif tf=="1H":
+        if tf=="1H":
             if dist<0:s+=12
             elif dist<=.0075:s+=22
             elif dist<=.012:s+=16
@@ -345,8 +337,8 @@ def prepare(d,tf,sym):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=73 if tf in ("15m","1H") else 72
-        need_rr=1.7 if tf in ("15m","1H") else 2.0
+        need=73 if tf=="1H" else 72
+        need_rr=1.7 if tf=="1H" else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
@@ -436,7 +428,7 @@ def signal(d,tf,sym):
 
 def send_signal(st,s):
     t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
-    stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="15m") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
+    stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
     txt=(f"宝宝巴士🚌上车就赚 {CODE_VER}\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
          f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
          f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
