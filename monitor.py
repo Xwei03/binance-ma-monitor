@@ -234,6 +234,36 @@ def daily_report(st):
         for r in losses:
             sym_s=r["sym"].replace("-USDT-SWAP","")
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%")
+    # 新增：在追明细
+    live_rows=[]
+    for s in lv:
+        tf=s.get("tf")
+        if tf not in TF:continue
+        d=candles(s["sym"],TF[tf][0],300)
+        if d is None:continue
+        ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])
+        f=d[d.ts>ts0]
+        if len(f)==0:continue
+        hi=f.h.max();lo=f.l.min()
+        ent=s.get("entry",0) or 0
+        tp_v=s.get("tp",0) or 0
+        side=s["dir"]
+        if ent and tp_v:
+            if side=="LONG":
+                tpd=tp_v-ent;mfp=hi-ent
+            else:
+                tpd=ent-tp_v;mfp=ent-lo
+            mfe_pct=mfp/tpd if tpd>0 else 0
+        else:
+            mfe_pct=0
+        live_rows.append((s,mfe_pct))
+    live_rows.sort(key=lambda x:-x[1])
+    if live_rows:
+        L.append("")
+        L.append(f"📋 在追明细（{len(live_rows)}条，按止盈进度降序）：")
+        for s,pct in live_rows:
+            sym_s=s["sym"].replace("-USDT-SWAP","")
+            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 进度{pct*100:.0f}%")
     if post_long(L):
         st["last_report"]=today;log("DAILY_REPORT",tw,tl,te,tto,len(lv))
     else:
