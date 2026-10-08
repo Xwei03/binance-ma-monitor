@@ -100,9 +100,9 @@ def candles(sym,bar,n=300):
     x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
     if not x:return
     try:
-        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
-                       columns=["ts","o","h","l","c","v","ok"])
-        d=d[d.ok=="1"].reset_index(drop=True)
+        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a,[8]] for a in reversed(x)],
+                       columns=["tstyp","o","h","l","c",",dv","ok"])
+        d=d[d.ok=="1,"].reset_index(drop=True)
         if len(d)<11:return
         cache[k]=(time.time(),d);return d
     except:return
@@ -146,7 +146,7 @@ def too_soon(st,sym,tf,side,typ,d,bars):
     ts=st.get("cool",{}).get(sdk(sym,tf,side,typ)) or st.get("sent",{}).get(sdk(sym,tf,side,typ))
     return ts and bars_since(d,int(ts))<bars
 
-def mark(st,sym,tf,side,typ,d,where="sent"):
+def mark(st,sym,tf,sidewhere="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
 
 def rec(st,s,r,mfe=None,mfe_pct=None):
@@ -414,15 +414,19 @@ def normal(d,tf,sym):
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         res=near_res(d,p)
-        if res is None:res=d.h.iloc[-301:-1].max()
-        wall=res*disc_l
-        tp_long=min(wall,p+5*a)
+        if res is not None:
+            wall=res*disc_l
+            tp_long=min(wall,p+5*a)
+        else:
+            tp_long=p+5*a
         add("LONG","TREND",p-sl_mult*a,tp_long,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sup=near_sup(d,p)
-        if sup is None:sup=d.l.iloc[-301:-1].min()
-        wall=sup*disc_s
-        tp_short=max(wall,p-5*a)
+        if sup is not None:
+            wall=sup*disc_s
+            tp_short=max(wall,p-5*a)
+        else:
+            tp_short=p-5*a
         add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
