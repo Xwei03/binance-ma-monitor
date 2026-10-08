@@ -387,7 +387,6 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
 
-    # 趋势止盈折扣：1H 下/上 1.5%，1D 下/上 2%
     disc_l = 0.98 if tf=="1D" else 0.985
     disc_s = 1.02 if tf=="1D" else 1.015
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
@@ -420,7 +419,14 @@ def normal(d,tf,sym):
             tp_long=min(wall,p+5*a)
         else:
             tp_long=p+5*a
-        add("LONG","TREND",p-sl_mult*a,tp_long,tr_rr)
+        fixed_sl=p-sl_mult*a
+        sup=near_sup(d,p)
+        if sup is not None:
+            sup_sl=sup-0.3*a
+            sl=max(fixed_sl,sup_sl)
+        else:
+            sl=fixed_sl
+        add("LONG","TREND",sl,tp_long,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sup=near_sup(d,p)
         if sup is not None:
@@ -428,7 +434,14 @@ def normal(d,tf,sym):
             tp_short=max(wall,p-5*a)
         else:
             tp_short=p-5*a
-        add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
+        fixed_sl=p+sl_mult*a
+        res=near_res(d,p)
+        if res is not None:
+            res_sl=res+0.3*a
+            sl=min(fixed_sl,res_sl)
+        else:
+            sl=fixed_sl
+        add("SHORT","TREND",sl,tp_short,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
