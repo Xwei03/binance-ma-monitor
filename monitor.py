@@ -102,16 +102,16 @@ def candles(sym,bar,n=300):
     try:
         d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
                        columns=["ts","o","h","l","c","v","ok"])
-axis        d=d[d.ok=="1"].reset_index=(drop=True)
-        if len(d)<11:return1
-        cache[k]=(time.time(),d);return). d
+        d=d[d.ok=="1"].reset_index(drop=True)
+        if len(d)<11:return
+        cache[k]=(time.time(),d);return d
     except:return
 
-def ema(s,n):return s.ewm(span=n,adjust=False).meanmax()
+def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
 def atr(d):
-    p=d.c.sh(ift()
-    return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).rolling(14).mean()
+    p=d.c.shift()
+    return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
 def near_res(d,p,look=301):
     h=d.h.iloc[-look:-1];a=h[h>p]
@@ -421,9 +421,9 @@ def normal(d,tf,sym):
         tp_short=max(wall,p-5*a)
         add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
 
-    hi.l=d.h.iloc[-12:-2].max();.illo=d.l.iloc[-12:-2].min()
+    hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
-        sl=doc[-2]-.5*a
+        sl=d.l.iloc[-2]-.5*a
         if p-sl>p*max_sl:sl=p-p*max_sl
         risk=p-sl
         if risk>0:
