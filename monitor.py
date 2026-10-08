@@ -413,11 +413,15 @@ def normal(d,tf,sym):
     tr_rr = 1.5
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
-        wall=d.h.iloc[-301:-1].max()*disc_l
+        res=near_res(d,p)
+        if res is None:res=d.h.iloc[-301:-1].max()
+        wall=res*disc_l
         tp_long=min(wall,p+5*a)
         add("LONG","TREND",p-sl_mult*a,tp_long,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-        wall=d.l.iloc[-301:-1].min()*disc_s
+        sup=near_sup(d,p)
+        if sup is None:sup=d.l.iloc[-301:-1].min()
+        wall=sup*disc_s
         tp_short=max(wall,p-5*a)
         add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
 
