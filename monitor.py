@@ -100,9 +100,9 @@ def candles(sym,bar,n=300):
     x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
     if not x:return
     try:
-        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a,[8]] for a in reversed(x)],
-                       columns=["tstyp","o","h","l","c",",dv","ok"])
-        d=d[d.ok=="1,"].reset_index(drop=True)
+        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
+                       columns=["ts","o","h","l","c","v","ok"])
+        d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<11:return
         cache[k]=(time.time(),d);return d
     except:return
@@ -146,7 +146,7 @@ def too_soon(st,sym,tf,side,typ,d,bars):
     ts=st.get("cool",{}).get(sdk(sym,tf,side,typ)) or st.get("sent",{}).get(sdk(sym,tf,side,typ))
     return ts and bars_since(d,int(ts))<bars
 
-def mark(st,sym,tf,sidewhere="sent"):
+def mark(st,sym,tf,side,typ,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
 
 def rec(st,s,r,mfe=None,mfe_pct=None):
@@ -387,8 +387,9 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
 
-    disc_l = 0.97 if tf=="1D" else 0.98
-    disc_s = 1.03 if tf=="1D" else 1.02
+    # 趋势止盈折扣：1H 下/上 1.5%，1D 下/上 2%
+    disc_l = 0.98 if tf=="1D" else 0.985
+    disc_s = 1.02 if tf=="1D" else 1.015
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
@@ -410,7 +411,7 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
-    tr_rr = 1.5
+    tr_rr = 1.3
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         res=near_res(d,p)
