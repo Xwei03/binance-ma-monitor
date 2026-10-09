@@ -34,6 +34,8 @@ MAX_SL={"1H":0.025,"1D":0.05}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR=2.5
 GAP_CAP={"1H":0.04,"1D":0.10}
+PREPARE_GAP_ATR=1.5
+PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -270,7 +272,7 @@ def daily_report(st):
         e=sum(1 for r in sub if r["result"]=="ERROR");to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
         wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
-        lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
+        lm胜=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
         tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
         lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
         wa=sum(wm)/len(wm) if wm else 0
@@ -278,7 +280,7 @@ def daily_report(st):
         lpa=sum(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         t=w+l;tw+=w;tl+=l;te+=e;tto+=to
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 {wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     tt=tw+tl
     allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
     alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
@@ -357,7 +359,6 @@ def prepare(d,tf,sym):
     a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
     if pd.isna(av) or pd.isna(base):return
     e20=ema(d.c,20);e60=ema(d.c,60)
-    hi=d.h.iloc[-11:-1].max();lo=d.l.iloc[-11:-1].min()
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     vr3=d.v.iloc[-3:].mean()/max(d.v.iloc[-13:-3].mean(),1e-12)
     ar=av/base
@@ -365,32 +366,36 @@ def prepare(d,tf,sym):
     bs=btc(TF[tf][0])
     out=[]
 
-    dist_base=DIST[tf]
-    dist_cap=min(dist_base*max(ar,1.0), dist_base*2.0)
+    # 埋伏专用：gap 收紧
+    gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
 
     for side in ("LONG","SHORT"):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
-        dist=(hi-p)/p if side=="LONG" else (p-lo)/p
-        if dist<-0.010 or dist>dist_cap:continue
-        if (p>=hi if side=="LONG" else p<=lo) or vr>=2.0 or ar>1.6 or body>=.65:continue
+        if side=="LONG":
+            d_e20=(p-e20.iloc[-1])/p
+            if d_e20<0 or d_e20>gap_max:continue
+        else:
+            d_e20=(e20.iloc[-1]-p)/p
+            if d_e20<0 or d_e20>gap_max:continue
+        if vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6]):continue
         s=0
         s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
         if tf=="1H":
-            if dist<0:s+=12
-            elif dist<=.0075:s+=22
-            elif dist<=.012:s+=16
-            else:s+=2
+            if d_e20<=.005:s+=22
+            elif d_e20<=.010:s+=18
+            elif d_e20<=.020:s+=12
+            else:s+=4
         else:
-            if dist<0:s+=12
-            elif dist<=.0075:s+=22
-            elif dist<=.012:s+=16
-            else:s+=2
+            if d_e20<=.015:s+=22
+            elif d_e20<=.030:s+=18
+            elif d_e20<=.060:s+=12
+            else:s+=4
         s+=15
         s+=8
         s+=14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4
@@ -438,7 +443,7 @@ def prepare(d,tf,sym):
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
-                        "hi":float(hi),"lo":float(lo)})
+                        "hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym):
@@ -553,7 +558,7 @@ def signal(d,tf,sym):
 
 def send_signal(st,s):
     t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
-    stt="贴前高埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
+    stt="贴均线埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
     txt=(f"宝宝巴士🚌上车就赚 {CODE_VER}\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
          f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
          f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
