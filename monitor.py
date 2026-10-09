@@ -448,26 +448,23 @@ def normal(d,tf,sym):
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
 
-    # C方案：结构优先 + ATR 封顶封底
-    if tf=="1H":
-        sl_min=1.5*a; sl_max=2.5*a
-    else:
-        sl_min=2.0*a; sl_max=3.0*a
+    # 建议方案：结构位优先，封顶 2.0×ATR(1H) / 2.5×ATR(1D)，结构缓冲 0.5×ATR
+    sl_cap = 2.0*a if tf=="1H" else 2.5*a
+    buf = 0.5*a
 
-    def calc_sl_struct(side,sup_or_res):
-        if sup_or_res is None:
-            return p - sl_max if side=="LONG" else p + sl_max
+    def calc_sl_struct(side,struct_price):
+        """结构位优先。找不到结构 → 用封顶 ATR 兜底。"""
+        if struct_price is None:
+            return p - sl_cap if side=="LONG" else p + sl_cap
         if side=="LONG":
-            sl_c=sup_or_res-0.3*a
-            dist=p-sl_c
-            if dist<sl_min:return p-sl_min
-            if dist>sl_max:return p-sl_max
+            sl_c = struct_price - buf
+            if (p - sl_c) > sl_cap:
+                return p - sl_cap
             return sl_c
         else:
-            sl_c=sup_or_res+0.3*a
-            dist=sl_c-p
-            if dist<sl_min:return p+sl_min
-            if dist>sl_max:return p+sl_max
+            sl_c = struct_price + buf
+            if (sl_c - p) > sl_cap:
+                return p + sl_cap
             return sl_c
 
     def add(side,typ,sl,tp,need_rr):
