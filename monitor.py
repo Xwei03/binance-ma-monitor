@@ -165,7 +165,6 @@ def find_swing_levels(d,tf,p,side):
     return [(float(price),float(score)) for price,score in merged]
 
 def calc_sl_struct(d,tf,p,side,a):
-    """结构优先 + ATR 封顶。1H 2.0×ATR，1D 2.5×ATR，结构缓冲 0.5×ATR。"""
     sl_cap = 2.0*a if tf=="1H" else 2.5*a
     buf = 0.5*a
     if side=="LONG":
@@ -368,7 +367,6 @@ def prepare(d,tf,sym):
 
     dist_base=DIST[tf]
     dist_cap=min(dist_base*max(ar,1.0), dist_base*2.0)
-    # 统一折扣：1H 下/上 1.5%，1D 下/上 3%
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
 
@@ -455,7 +453,6 @@ def normal(d,tf,sym):
     body_prev=abs(d.c.iloc[-2]-d.o.iloc[-2])/max(d.h.iloc[-2]-d.l.iloc[-2],a*.01)
     bs=btc(TF[tf][0]);out=[]
 
-    # 统一折扣：1H 下/上 1.5%，1D 下/上 3%
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
 
@@ -485,33 +482,31 @@ def normal(d,tf,sym):
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
-        cands=find_swing_levels(d,tf,p,"res")
-        tp=None
-        if cands:
-            for price,_ in cands:
-                if price<=p:continue
-                tp_c=min(price*disc_l, p+5*a)
-                if (tp_c-p)/risk>=tr_rr:
-                    tp=tp_c
-                    break
-        if tp is None:
-            tp=p+5*a
-        add("LONG","TREND",sl_c,tp,tr_rr)
+        if risk>0:
+            cands=find_swing_levels(d,tf,p,"res")
+            if cands:
+                for price,_ in cands:
+                    if price<=p:continue
+                    tp_c=min(price*disc_l, p+5*a)
+                    if (tp_c-p)/risk>=tr_rr:
+                        add("LONG","TREND",sl_c,tp_c,tr_rr)
+                        break
+            else:
+                add("LONG","TREND",sl_c,p+5*a,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
-        cands=find_swing_levels(d,tf,p,"sup")
-        tp=None
-        if cands:
-            for price,_ in cands:
-                if price>=p:continue
-                tp_c=max(price*disc_s, p-5*a)
-                if (p-tp_c)/risk>=tr_rr:
-                    tp=tp_c
-                    break
-        if tp is None:
-            tp=p-5*a
-        add("SHORT","TREND",sl_c,tp,tr_rr)
+        if risk>0:
+            cands=find_swing_levels(d,tf,p,"sup")
+            if cands:
+                for price,_ in cands:
+                    if price>=p:continue
+                    tp_c=max(price*disc_s, p-5*a)
+                    if (p-tp_c)/risk>=tr_rr:
+                        add("SHORT","TREND",sl_c,tp_c,tr_rr)
+                        break
+            else:
+                add("SHORT","TREND",sl_c,p-5*a,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -520,15 +515,16 @@ def normal(d,tf,sym):
         if risk>0:
             base_tp=p+1.5*risk
             cands=find_swing_levels(d,tf,p,"res")
-            used=False
-            for price,_ in cands:
-                if price<=p:continue
-                cd=price*disc_l
-                if cd>p:
-                    add("LONG","BREAKOUT",sl_c,min(cd,base_tp),1.5)
-                    used=True
-                    break
-            if not used:
+            if cands:
+                for price,_ in cands:
+                    if price<=p:continue
+                    cd=price*disc_l
+                    if cd>p:
+                        tp_use=min(cd,base_tp)
+                        if (tp_use-p)/risk>=1.5:
+                            add("LONG","BREAKOUT",sl_c,tp_use,1.5)
+                            break
+            else:
                 add("LONG","BREAKOUT",sl_c,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
@@ -536,15 +532,16 @@ def normal(d,tf,sym):
         if risk>0:
             base_tp=p-1.5*risk
             cands=find_swing_levels(d,tf,p,"sup")
-            used=False
-            for price,_ in cands:
-                if price>=p:continue
-                cd=price*disc_s
-                if cd<p:
-                    add("SHORT","BREAKOUT",sl_c,max(cd,base_tp),1.5)
-                    used=True
-                    break
-            if not used:
+            if cands:
+                for price,_ in cands:
+                    if price>=p:continue
+                    cd=price*disc_s
+                    if cd<p:
+                        tp_use=max(cd,base_tp)
+                        if (p-tp_use)/risk>=1.5:
+                            add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
+                            break
+            else:
                 add("SHORT","BREAKOUT",sl_c,base_tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
