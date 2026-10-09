@@ -34,6 +34,7 @@ MAX_SL={"1H":0.025,"1D":0.05}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR=2.5
 GAP_CAP={"1H":0.04,"1D":0.10}
+SWING_N=3
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -113,13 +114,25 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def near_res(d,p,look=301):
-    h=d.h.iloc[-look:-1];a=h[h>p]
-    return float(a.min()) if len(a) else None
+def near_res(d,p,look=301,n=SWING_N):
+    h=d.h.iloc[-look:-1].values
+    m=len(h)
+    if m<2*n+1:return None
+    cands=[]
+    for i in range(n,m-n):
+        if h[i]>p and h[i]>=h[i-n:i].max() and h[i]>=h[i+1:i+n+1].max():
+            cands.append(h[i])
+    return float(min(cands)) if cands else None
 
-def near_sup(d,p,look=301):
-    l=d.l.iloc[-look:-1];b=l[l<p]
-    return float(b.max()) if len(b) else None
+def near_sup(d,p,look=301,n=SWING_N):
+    l=d.l.iloc[-look:-1].values
+    m=len(l)
+    if m<2*n+1:return None
+    cands=[]
+    for i in range(n,m-n):
+        if l[i]<p and l[i]<=l[i-n:i].min() and l[i]<=l[i+1:i+n+1].min():
+            cands.append(l[i])
+    return float(max(cands)) if cands else None
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
