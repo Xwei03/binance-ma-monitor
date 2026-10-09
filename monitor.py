@@ -26,7 +26,7 @@ def now_bj():return datetime.now(BJ_TZ)
 
 def log(*args):print(*args)
 
-TF={"1H":("1H",300,73,6),"1D":("1D",300,72,4)}
+TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 DIST={"1H":.025,"1D":.04}
 MAX_HOLD={"1H":100,"1D":30}
 TREND_SL={"1H":2.0,"1D":2.5}
@@ -113,13 +113,56 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def near_res(d,p,look=301):
-    h=d.h.iloc[-look:-1];a=h[h>p]
-    return float(a.min()) if len(a) else None
-
-def near_sup(d,p,look=301):
-    l=d.l.iloc[-look:-1];b=l[l<p]
-    return float(b.max()) if len(b) else None
+def find_swing_levels(d,tf,p,side):
+    n_l=5
+    n_r=2 if tf=="1H" else 3
+    look=500 if tf=="1H" else 300
+    arr_h=d.h.iloc[-look:-1].values
+    arr_l=d.l.iloc[-look:-1].values
+    arr_v=d.v.iloc[-look:-1].values
+    m=len(arr_h)
+    if m<n_l+n_r+1:return []
+    avg_vol=d.v.iloc[-21:-1].mean()
+    if pd.isna(avg_vol) or avg_vol<=0:avg_vol=1
+    cands=[]
+    if side=="res":
+        for i in range(n_l,m-n_r):
+            if arr_h[i]>=arr_h[i-n_l:i].max() and arr_h[i]>=arr_h[i+1:i+n_r+1].max() and arr_h[i]>p:
+                price=arr_h[i]
+                tol=price*0.005
+                hits=int(((arr_h>price-tol)&(arr_h<price+tol)).sum())
+                vol_ratio=arr_v[i]/avg_vol
+                time_weight=1+(i/m)
+                score=vol_ratio*time_weight+hits*0.5
+                cands.append((price,score))
+    else:
+        for i in range(n_l,m-n_r):
+            if arr_l[i]<=arr_l[i-n_l:i].min() and arr_l[i]<=arr_l[i+1:i+n_r+1].min() and arr_l[i]<p:
+                price=arr_l[i]
+                tol=price*0.005
+                hits=int(((arr_l>price-tol)&(arr_l<price+tol)).sum())
+                vol_ratio=arr_v[i]/avg_vol
+                time_weight=1+(i/m)
+                score=vol_ratio*time_weight+hits*0.5
+                cands.append((price,score))
+    if not cands:return []
+    cands.sort(key=lambda x:-x[1])
+    used=[False]*len(cands)
+    merged=[]
+    for i in range(len(cands)):
+        if used[i]:continue
+        price=cands[i][0];score=cands[i][1]
+        group=[price];used[i]=True
+        for j in range(i+1,len(cands)):
+            if used[j]:continue
+            p2=cands[j][0]
+            if abs(p2-price)/price<0.003:
+                group.append(p2);used[j]=True
+        merged.append((sum(group)/len(group),score))
+    merged=[x for x in merged if x[1]>=0.5]
+    if not merged:return []
+    merged.sort(key=lambda x:abs(x[0]-p))
+    return [(float(price),float(score)) for price,score in merged]
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
@@ -335,6 +378,9 @@ def prepare(d,tf,sym):
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
 
+        need=73 if tf=="1H" else 72
+        need_rr=1.5 if tf=="1H" else 2.0
+
         if side=="LONG":
             sl=float(min(lows))-1.0*av
             if p-sl<0.8*av:sl=p-0.8*av
@@ -342,12 +388,16 @@ def prepare(d,tf,sym):
             if risk<=0:continue
             if tf=="1D":
                 sl=min(sl,p-2*av);risk=p-sl
-            pr=near_res(d,p)
-            if pr is not None:
-                cd=pr*disc_l
+            cands=find_swing_levels(d,tf,p,"res")
+            tp=None
+            for price,_ in cands:
+                cd=price*disc_l
                 if cd<=p:continue
-                tp=cd
-            else:
+                rr_c=(cd-p)/risk
+                if rr_c>=need_rr:
+                    tp=cd
+                    break
+            if tp is None:
                 tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
@@ -357,17 +407,19 @@ def prepare(d,tf,sym):
             if risk<=0:continue
             if tf=="1D":
                 sl=max(sl,p+2*av);risk=sl-p
-            sp=near_sup(d,p)
-            if sp is not None:
-                cd=sp*disc_s
+            cands=find_swing_levels(d,tf,p,"sup")
+            tp=None
+            for price,_ in cands:
+                cd=price*disc_s
                 if cd>=p:continue
-                tp=cd
-            else:
+                rr_c=(p-cd)/risk
+                if rr_c>=need_rr:
+                    tp=cd
+                    break
+            if tp is None:
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
-        need=73 if tf=="1H" else 72
-        need_rr=1.7 if tf=="1H" else 2.0
         if s>=need and rr>=need_rr:
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
@@ -387,8 +439,13 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
 
+    # 突破用折扣（2%/3%，不变）
     disc_l = 0.97 if tf=="1D" else 0.98
     disc_s = 1.03 if tf=="1D" else 1.02
+    # 趋势用折扣（1H改成1.5%，1D保持3%）
+    trend_disc_l = 0.97 if tf=="1D" else 0.985
+    trend_disc_s = 1.03 if tf=="1D" else 1.015
+
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
@@ -410,30 +467,38 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
-    tr_rr = 1.5
+    tr_rr = 1.2 if tf=="1H" else 1.5
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
-        if len(d)>=301:
-            res=float(d.h.iloc[-301:-1].nlargest(5).mean())
-        else:
-            res=float(d.h.nlargest(5).mean())
-        if p>=res:
-            tp_long=p+5*a
-        else:
-            wall=res*disc_l
-            tp_long=min(wall,p+5*a)
-        add("LONG","TREND",p-sl_mult*a,tp_long,tr_rr)
+        sl_fixed=p-sl_mult*a
+        risk=p-sl_fixed
+        cands=find_swing_levels(d,tf,p,"res")
+        tp=None
+        if cands:
+            for price,_ in cands:
+                if price<=p:continue
+                tp_c=min(price*trend_disc_l, p+5*a)
+                if (tp_c-p)/risk>=tr_rr:
+                    tp=tp_c
+                    break
+        if tp is None:
+            tp=p+5*a
+        add("LONG","TREND",sl_fixed,tp,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-        if len(d)>=301:
-            sup=float(d.l.iloc[-301:-1].nsmallest(5).mean())
-        else:
-            sup=float(d.l.nsmallest(5).mean())
-        if p<=sup:
-            tp_short=p-5*a
-        else:
-            wall=sup*disc_s
-            tp_short=max(wall,p-5*a)
-        add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
+        sl_fixed=p+sl_mult*a
+        risk=sl_fixed-p
+        cands=find_swing_levels(d,tf,p,"sup")
+        tp=None
+        if cands:
+            for price,_ in cands:
+                if price>=p:continue
+                tp_c=max(price*trend_disc_s, p-5*a)
+                if (p-tp_c)/risk>=tr_rr:
+                    tp=tp_c
+                    break
+        if tp is None:
+            tp=p-5*a
+        add("SHORT","TREND",sl_fixed,tp,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -442,11 +507,16 @@ def normal(d,tf,sym):
         risk=p-sl
         if risk>0:
             base_tp=p+1.5*risk
-            pr=near_res(d,p)
-            if pr is not None:
-                cd=pr*disc_l
-                if cd>p:add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
-            else:
+            cands=find_swing_levels(d,tf,p,"res")
+            used=False
+            for price,_ in cands:
+                if price<=p:continue
+                cd=price*disc_l
+                if cd>p:
+                    add("LONG","BREAKOUT",sl,min(cd,base_tp),1.5)
+                    used=True
+                    break
+            if not used:
                 add("LONG","BREAKOUT",sl,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl=d.h.iloc[-2]+.5*a
@@ -454,11 +524,16 @@ def normal(d,tf,sym):
         risk=sl-p
         if risk>0:
             base_tp=p-1.5*risk
-            sp=near_sup(d,p)
-            if sp is not None:
-                cd=sp*disc_s
-                if cd<p:add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
-            else:
+            cands=find_swing_levels(d,tf,p,"sup")
+            used=False
+            for price,_ in cands:
+                if price>=p:continue
+                cd=price*disc_s
+                if cd<p:
+                    add("SHORT","BREAKOUT",sl,max(cd,base_tp),1.5)
+                    used=True
+                    break
+            if not used:
                 add("SHORT","BREAKOUT",sl,base_tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
