@@ -34,7 +34,6 @@ MAX_SL={"1H":0.025,"1D":0.05}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR=2.5
 GAP_CAP={"1H":0.04,"1D":0.10}
-SWING_N=3
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN,MAX_LIVE=20,200
@@ -114,25 +113,13 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def near_res(d,p,look=301,n=SWING_N):
-    h=d.h.iloc[-look:-1].values
-    m=len(h)
-    if m<2*n+1:return None
-    cands=[]
-    for i in range(n,m-n):
-        if h[i]>p and h[i]>=h[i-n:i].max() and h[i]>=h[i+1:i+n+1].max():
-            cands.append(h[i])
-    return float(min(cands)) if cands else None
+def near_res(d,p,look=301):
+    h=d.h.iloc[-look:-1];a=h[h>p]
+    return float(a.min()) if len(a) else None
 
-def near_sup(d,p,look=301,n=SWING_N):
-    l=d.l.iloc[-look:-1].values
-    m=len(l)
-    if m<2*n+1:return None
-    cands=[]
-    for i in range(n,m-n):
-        if l[i]<p and l[i]<=l[i-n:i].min() and l[i]<=l[i+1:i+n+1].min():
-            cands.append(l[i])
-    return float(max(cands)) if cands else None
+def near_sup(d,p,look=301):
+    l=d.l.iloc[-look:-1];b=l[l<p]
+    return float(b.max()) if len(b) else None
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
@@ -400,8 +387,8 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
 
-    disc_l = 0.98 if tf=="1D" else 0.985
-    disc_s = 1.02 if tf=="1D" else 1.015
+    disc_l = 0.97 if tf=="1D" else 0.98
+    disc_s = 1.03 if tf=="1D" else 1.02
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
@@ -423,38 +410,16 @@ def normal(d,tf,sym):
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
                         "entry":p,"sl":sl,"tp":tp,"rr":rr})
 
-    tr_rr = 1.3
+    tr_rr = 1.5
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
-        res=near_res(d,p)
-        if res is not None:
-            wall=res*disc_l
-            tp_long=min(wall,p+5*a)
-        else:
-            tp_long=p+5*a
-        fixed_sl=p-sl_mult*a
-        sup=near_sup(d,p)
-        if sup is not None:
-            sup_sl=sup-0.3*a
-            sl=max(fixed_sl,sup_sl)
-        else:
-            sl=fixed_sl
-        add("LONG","TREND",sl,tp_long,tr_rr)
+        wall=d.h.iloc[-301:-1].max()*disc_l
+        tp_long=min(wall,p+5*a)
+        add("LONG","TREND",p-sl_mult*a,tp_long,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-        sup=near_sup(d,p)
-        if sup is not None:
-            wall=sup*disc_s
-            tp_short=max(wall,p-5*a)
-        else:
-            tp_short=p-5*a
-        fixed_sl=p+sl_mult*a
-        res=near_res(d,p)
-        if res is not None:
-            res_sl=res+0.3*a
-            sl=min(fixed_sl,res_sl)
-        else:
-            sl=fixed_sl
-        add("SHORT","TREND",sl,tp_short,tr_rr)
+        wall=d.l.iloc[-301:-1].min()*disc_s
+        tp_short=max(wall,p-5*a)
+        add("SHORT","TREND",p+sl_mult*a,tp_short,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
