@@ -439,16 +439,36 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);out=[]
     sl_mult=TREND_SL.get(tf,2.0)
 
-    # 突破用折扣（2%/3%，不变）
     disc_l = 0.97 if tf=="1D" else 0.98
     disc_s = 1.03 if tf=="1D" else 1.02
-    # 趋势用折扣（1H改成1.5%，1D保持3%）
     trend_disc_l = 0.97 if tf=="1D" else 0.985
     trend_disc_s = 1.03 if tf=="1D" else 1.015
 
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
     max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
+
+    # C方案：结构优先 + ATR 封顶封底
+    if tf=="1H":
+        sl_min=1.5*a; sl_max=2.5*a
+    else:
+        sl_min=2.0*a; sl_max=3.0*a
+
+    def calc_sl_struct(side,sup_or_res):
+        if sup_or_res is None:
+            return p - sl_max if side=="LONG" else p + sl_max
+        if side=="LONG":
+            sl_c=sup_or_res-0.3*a
+            dist=p-sl_c
+            if dist<sl_min:return p-sl_min
+            if dist>sl_max:return p-sl_max
+            return sl_c
+        else:
+            sl_c=sup_or_res+0.3*a
+            dist=sl_c-p
+            if dist<sl_min:return p+sl_min
+            if dist>sl_max:return p+sl_max
+            return sl_c
 
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and p<=d.o.iloc[-1]:return
@@ -470,8 +490,10 @@ def normal(d,tf,sym):
     tr_rr = 1.2 if tf=="1H" else 1.5
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
-        sl_fixed=p-sl_mult*a
-        risk=p-sl_fixed
+        sup_list=find_swing_levels(d,tf,p,"sup")
+        sup=sup_list[0][0] if sup_list else None
+        sl_c=calc_sl_struct("LONG",sup)
+        risk=p-sl_c
         cands=find_swing_levels(d,tf,p,"res")
         tp=None
         if cands:
@@ -483,10 +505,12 @@ def normal(d,tf,sym):
                     break
         if tp is None:
             tp=p+5*a
-        add("LONG","TREND",sl_fixed,tp,tr_rr)
+        add("LONG","TREND",sl_c,tp,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-        sl_fixed=p+sl_mult*a
-        risk=sl_fixed-p
+        res_list=find_swing_levels(d,tf,p,"res")
+        res=res_list[0][0] if res_list else None
+        sl_c=calc_sl_struct("SHORT",res)
+        risk=sl_c-p
         cands=find_swing_levels(d,tf,p,"sup")
         tp=None
         if cands:
@@ -498,7 +522,7 @@ def normal(d,tf,sym):
                     break
         if tp is None:
             tp=p-5*a
-        add("SHORT","TREND",sl_fixed,tp,tr_rr)
+        add("SHORT","TREND",sl_c,tp,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
