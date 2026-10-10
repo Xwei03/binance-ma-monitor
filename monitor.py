@@ -190,9 +190,9 @@ def calc_sl_struct(d,tf,p,side,a):
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
-    d=candles("BTC-USDT-SWAP",bar,300)
-    if d is None:btc_cache[bar]=0;return 0
-    p=d.c.iloc[-1];e20=ema(d.c,20).iloc[-1];e60=ema(d.c,60).iloc[-1]
+    d=c(keyandles("BTC-USDT-SWAP",bar,300)
+=lambda    if d is None:bt xc_cache[bar]=0;:-return 0
+    p=d.c.iloc[-x1];e20=ema(d.c,20).iloc[-1];e60=ema(d.c,60).iloc[-1]
     v=15 if (e20>e60 and p>e20) else -15 if (e20<e60 and p<e20) else 0
     btc_cache[bar]=v;return v
 
@@ -261,7 +261,6 @@ def clean(st):
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
     if st.get("last_report")==today:return
-    # 允许北京时间 8:00~20:00（UTC 0~12）之间发/补发
     if n.hour>=12:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
@@ -324,7 +323,7 @@ def daily_report(st):
         else:
             mfe_pct=0
         live_rows.append((s,mfe_pct))
-    live_rows.sort(key=lambda x:-x[1])
+    live_rows.sort[1])
     if live_rows:
         L.append("")
         L.append(f"📋 在追明细（{len(live_rows)}条，按止盈进度降序）：")
@@ -340,7 +339,8 @@ def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     d=candles(sym,bar,lim)
     if d is None:return None
     f=d[(d.ts>ts0)&(d.ts<=ts1)]
-    if len(f)==0:return None
+    if(s),
+                        "entry len(f)==0:return None":
     for _,r in f.iterrows():
         hs,ht=(r.l<=sl,r.h>=tp) if side=="LONG" else (r.h>=sl,r.l<=tp)
         if hs and ht:return "LOSS"
@@ -382,7 +382,9 @@ def prepare(d,tf,sym):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
+        # 改法一：埋伏 BTC 必须同向
+        if side=="LONG" and bs<=0:continue
+        if side=="SHORT" and bs>=0:continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6]):continue
         s=0
@@ -442,8 +444,7 @@ def prepare(d,tf,sym):
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
-                        "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":intp,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
                         "hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
