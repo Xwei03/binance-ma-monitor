@@ -272,7 +272,7 @@ def daily_report(st):
         e=sum(1 for r in sub if r["result"]=="ERROR");to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
         wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
-        lm胜=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
+        lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
         tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
         lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
         wa=sum(wm)/len(wm) if wm else 0
@@ -280,7 +280,7 @@ def daily_report(st):
         lpa=sum(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         t=w+l;tw+=w;tl+=l;te+=e;tto+=to
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 {wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     tt=tw+tl
     allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
     alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
@@ -366,7 +366,6 @@ def prepare(d,tf,sym):
     bs=btc(TF[tf][0])
     out=[]
 
-    # 埋伏专用：gap 收紧
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
