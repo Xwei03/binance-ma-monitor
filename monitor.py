@@ -260,7 +260,9 @@ def clean(st):
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
-    if n.hour!=0 or st.get("last_report")==today:return
+    if st.get("last_report")==today:return
+    # 允许北京时间 8:00~20:00（UTC 0~12）之间发/补发
+    if n.hour>=12:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
