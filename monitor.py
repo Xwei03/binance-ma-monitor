@@ -219,6 +219,7 @@ def mark(st,sym,tf,side,typ,d,where="sent"):
 def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
        "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER}
+    if s.get("sent_ts"):e["sig_ts"]=int(s["sent_ts"])
     if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
     if mfe_pct is not None:e["mfe_pct"]=round(min(float(mfe_pct),1.0)*100,1)
     st.setdefault("results",[]).append(e)
@@ -308,7 +309,10 @@ def daily_report(st):
         L.append(f"📋 止损明细（{len(losses)}条，按止盈进度降序，止盈=100%）：")
         for r in losses:
             sym_s=r["sym"].replace("-USDT-SWAP","")
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%")
+            t_str=""
+            if "sig_ts" in r:
+                t_str=datetime.fromtimestamp(r["sig_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
     live_rows=[]
     for s in lv:
         tf=s.get("tf")
@@ -337,7 +341,10 @@ def daily_report(st):
         L.append(f"📋 在追明细（{len(live_rows)}条，按止盈进度降序）：")
         for s,pct in live_rows:
             sym_s=s["sym"].replace("-USDT-SWAP","")
-            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 进度{pct*100:.0f}%")
+            t_str=""
+            if s.get("sent_ts"):
+                t_str=datetime.fromtimestamp(s["sent_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
+            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 进度{pct*100:.0f}% 开仓{t_str}")
     if post_long(L):
         st["last_report"]=today;log("DAILY_REPORT",tw,tl,te,tto,len(lv))
     else:
@@ -389,7 +396,6 @@ def prepare(d,tf,sym):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
-        # BTC 反向不发，横盘允许（回退原逻辑）
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6]):continue
