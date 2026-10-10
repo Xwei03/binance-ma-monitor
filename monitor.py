@@ -238,17 +238,25 @@ def post(txt):
             log(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
     return False
 
-def post_long(lines,max_len=3000,gap=1.2):
-    cur=[];cur_len=0;ok=True
+def post_long(lines,max_len=1500,gap=2.0,tag=""):
+    """分批发送，每批最多 max_len 字符，间隔 gap 秒。返回是否全部成功。"""
+    # 先分组
+    batches=[];cur=[];cur_len=0
     for line in lines:
         l=len(line)+1
         if cur_len+l>max_len and cur:
-            if not post("\n".join(cur)):ok=False
-            time.sleep(gap)
+            batches.append(cur)
             cur=[];cur_len=0
         cur.append(line);cur_len+=l
-    if cur:
-        if not post("\n".join(cur)):ok=False
+    if cur:batches.append(cur)
+    total=len(batches)
+    ok=True
+    for idx,batch in enumerate(batches,1):
+        header=f"（第{idx}/{total}批）" if total>1 else ""
+        body="\n".join(batch)
+        if header:body=header+"\n"+body
+        if not post(body):ok=False
+        if idx<total:time.sleep(gap)
     return ok
 
 def clean(st):
