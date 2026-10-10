@@ -238,9 +238,8 @@ def post(txt):
             log(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
     return False
 
-def post_long(lines,max_len=1500,gap=2.0,tag=""):
-    """分批发送，每批最多 max_len 字符，间隔 gap 秒。返回是否全部成功。"""
-    # 先分组
+def post_long(lines,max_len=1500,gap=2.0):
+    """分批发送。每批都带'警报'关键词，保证过飞书安全设置。"""
     batches=[];cur=[];cur_len=0
     for line in lines:
         l=len(line)+1
@@ -252,9 +251,11 @@ def post_long(lines,max_len=1500,gap=2.0,tag=""):
     total=len(batches)
     ok=True
     for idx,batch in enumerate(batches,1):
-        header=f"（第{idx}/{total}批）" if total>1 else ""
-        body="\n".join(batch)
-        if header:body=header+"\n"+body
+        if total>1:
+            header=f"🚨 警报 日报（第{idx}/{total}批）"
+            body=header+"\n"+"\n".join(batch)
+        else:
+            body="\n".join(batch)
         if not post(body):ok=False
         if idx<total:time.sleep(gap)
     return ok
@@ -647,7 +648,7 @@ def scan():
                 s=signal(dd,tf,sym)
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
-                key=sdk(s["sym"],tf,s["dir"],s["type"])
+                key=sdk(s["sym"],s["tf"],s["dir"],s["type"])
                 if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
                 s["sent_ts"]=int(dd.ts.iloc[-1])
                 hits.append(s)
