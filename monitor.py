@@ -239,7 +239,6 @@ def post(txt):
     return False
 
 def post_long(lines,max_len=1500,gap=2.0):
-    """分批发送。每批都带'警报'关键词，保证过飞书安全设置。"""
     batches=[];cur=[];cur_len=0
     for line in lines:
         l=len(line)+1
@@ -390,8 +389,8 @@ def prepare(d,tf,sym):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
-        if side=="LONG" and bs<=0:continue
-        if side=="SHORT" and bs>=0:continue
+        # BTC 反向不发，横盘允许（回退原逻辑）
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6]):continue
         s=0
@@ -648,7 +647,7 @@ def scan():
                 s=signal(dd,tf,sym)
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
-                key=sdk(s["sym"],s["tf"],s["dir"],s["type"])
+                key=sdk(s["sym"],tf,s["dir"],s["type"])
                 if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
                 s["sent_ts"]=int(dd.ts.iloc[-1])
                 hits.append(s)
