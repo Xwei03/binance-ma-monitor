@@ -220,6 +220,7 @@ def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
        "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER}
     if s.get("sent_ts"):e["sig_ts"]=int(s["sent_ts"])
+    if s.get("entry"):e["entry"]=float(s["entry"])
     if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
     if mfe_pct is not None:e["mfe_pct"]=round(min(float(mfe_pct),1.0)*100,1)
     st.setdefault("results",[]).append(e)
@@ -312,7 +313,9 @@ def daily_report(st):
             t_str=""
             if "sig_ts" in r:
                 t_str=datetime.fromtimestamp(r["sig_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
+            dir_s=DIR.get(r.get("dir",""),"?")
+            ent=r.get("entry",0)
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {dir_s} 入场{ent:.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
     live_rows=[]
     for s in lv:
         tf=s.get("tf")
@@ -344,7 +347,8 @@ def daily_report(st):
             t_str=""
             if s.get("sent_ts"):
                 t_str=datetime.fromtimestamp(s["sent_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
-            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 进度{pct*100:.0f}% 开仓{t_str}")
+            ent=s.get("entry",0) or 0
+            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 入场{ent:.8g} 进度{pct*100:.0f}% 开仓{t_str}")
     if post_long(L):
         st["last_report"]=today;log("DAILY_REPORT",tw,tl,te,tto,len(lv))
     else:
