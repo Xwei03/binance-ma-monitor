@@ -399,8 +399,8 @@ def prepare(d,tf,sym):
         else:
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
-        # 均线间距：EMA20 和 EMA60 差距 > 0.5×ATR 就不算横盘，不发埋伏
-        if abs(e20.iloc[-1]-e60.iloc[-1]) > 0.5*av:continue
+        # 均线间距：EMA20 和 EMA60 差距 > 1.0×ATR 就不算横盘，不发埋伏
+        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
