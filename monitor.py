@@ -298,9 +298,9 @@ def daily_report(st):
     alltm=[r["mfe"] for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
     alllmp=[r["mfe_pct"] for r in rs if r["result"]=="LOSS" and "mfe_pct" in r]
     wa=sum(allwm)/len(allwm) if allwm else 0
-    la=sum(alllm)/len(alllm) if alllm else 0
-    lpa=sum(alllmp)/len(alllmp) if alllmp else 0
-    ta=sum(alltm)/len(alltm) if alltm else 0
+   和 la=sum(alllm)/len(alllm) EMA if alllm else 0
+    lpa=sum60(alllmp)/len(alllmp) if  alllmp else 0
+    ta=sum不能(alltm)/len(alltm) if alltm else 0
     L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
@@ -399,6 +399,8 @@ def prepare(d,tf,sym):
         else:
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
+        # 均线缠绕过滤：EMA20 拉太开（0.5×ATR）
+        if abs(e20.iloc[-1] - e60.iloc[-1]) > 0.5 * av:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
