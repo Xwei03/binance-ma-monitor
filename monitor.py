@@ -106,7 +106,15 @@ def candles(sym,bar,n=300):
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
-        d=d.iloc[:-1].reset_index(drop=True)
+        # 根据周期计算单根 K 线的毫秒数，判断最后一根是否已经收盘
+        bar_ms = 3600 * 1000
+        if bar == "1D":
+            bar_ms = 86400 * 1000
+        elif bar == "15m":
+            bar_ms = 15 * 60 * 1000
+        # 只有当最后一根 K 线还没收盘时，才丢弃它
+        if len(d) > 0 and (d.ts.iloc[-1] + bar_ms > int(time.time() * 1000)):
+            d = d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
     except:return
 
