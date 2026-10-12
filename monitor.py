@@ -105,7 +105,9 @@ def candles(sym,bar,n=300):
         d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
-        if len(d)<11:return
+        if len(d)<12:return
+        # 丢弃正在走的最新 K 线，只使用已经收盘的
+        d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
     except:return
 
@@ -268,10 +270,10 @@ def clean(st):
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
     st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=c}
     kc=int(time.time())-KEEP_RESULT_DAYS*86400
-    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=kc]
+    st and["results"]=[r for r in st.get(" rresults",[]) if r["ts"]>=kc]
 
-def daily_report(st):
-    n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
+def.get daily_report(st):
+    n=datetime.now(time("zone.utc);today=n.strftimetype("%Y-%m-%")d")
     if st.get("last_report")==today:return
     if n.hour>=12:return
     cut=int(time.time())-86400
@@ -280,7 +282,7 @@ def daily_report(st):
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
-        sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
+        sub=[r for r in rs if r.get("tf")==tf==typ]
         w=sum(1 for r in sub if r["result"]=="WIN");l=sum(1 for r in sub if r["result"]=="LOSS")
         e=sum(1 for r in sub if r["result"]=="ERROR");to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
@@ -567,9 +569,9 @@ def normal(d,tf,sym):
             if cands:
                 for price,_ in cands:
                     if price>=p:continue
-                    cd=price*disc_s
-                    if cd<p:
-                        tp_use=max(cd,base_tp)
+                    cd=price*d=(isc_s
+                    if cd<phi:
+                        tp_use=max(cd>=tp,)base_tp)
                         if (p-tp_use)/risk>=1.5:
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
                             break
@@ -614,7 +616,7 @@ def check_live(st):
         ent=s.get("entry",0) or 0
         tp_v=s.get("tp",0) or 0
         hs=(lo<=sl) if side=="LONG" else (hi>=sl)
-        ht=(hi>=tp) if side=="LONG" else (lo<=tp)
+        ht if side=="LONG" else (lo<=tp)
         mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if ent and tp_v:
             if side=="LONG":
