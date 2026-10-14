@@ -174,34 +174,23 @@ def find_swing_levels(d,tf,p,side):
 def calc_sl_struct(d,tf,p,side,a):
     sl_cap = 2.0*a if tf=="1H" else 2.5*a
     buf = 1.0*a
-    # 最低止损距离
-    min_pct = 0.012 if tf=="1H" else 0.025
-    min_dist = min_pct * p
     if side=="LONG":
         sup_list=find_swing_levels(d,tf,p,"sup")
         sup=sup_list[0][0] if sup_list else None
         if sup is None:
-            sl_c = p - sl_cap
-        else:
-            sl_c = sup - buf
-            if (p - sl_c) > sl_cap:
-                sl_c = p - sl_cap
-        # 最低距离检查：止损太近就强制放宽
-        if (p - sl_c) < min_dist:
-            sl_c = p - min_dist
+            return p - sl_cap
+        sl_c = sup - buf
+        if (p - sl_c) > sl_cap:
+            return p - sl_cap
         return sl_c
     else:
         res_list=find_swing_levels(d,tf,p,"res")
         res=res_list[0][0] if res_list else None
         if res is None:
-            sl_c = p + sl_cap
-        else:
-            sl_c = res + buf
-            if (sl_c - p) > sl_cap:
-                sl_c = p + sl_cap
-        # 最低距离检查：止损太近就强制放宽
-        if (sl_c - p) < min_dist:
-            sl_c = p + min_dist
+            return p + sl_cap
+        sl_c = res + buf
+        if (sl_c - p) > sl_cap:
+            return p + sl_cap
         return sl_c
 
 def btc(bar):
