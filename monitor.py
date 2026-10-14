@@ -172,8 +172,9 @@ def find_swing_levels(d,tf,p,side):
     return [(float(price),float(score)) for price,score in merged]
 
 def calc_sl_struct(d,tf,p,side,a):
+    # 缓冲改成 1.0×ATR（原来是 0.5×ATR）
     sl_cap = 2.0*a if tf=="1H" else 2.5*a
-    buf = 0.5*a
+    buf = 1.0*a
     if side=="LONG":
         sup_list=find_swing_levels(d,tf,p,"sup")
         sup=sup_list[0][0] if sup_list else None
@@ -385,7 +386,7 @@ def resolve(sym,side,sl,tp,ts0,ts1,tf):
         r=try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
         return r if r is not None else try_res(sym,"1H",300,side,sl,tp,ts0,ts1)
     r=try_res(sym,"1m",300,side,sl,tp,ts0,ts1)
-    return r if r is not None else try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
+    return r if r is not None else try_res(sym,"5m",300,sl,tp,ts0,ts1) if False else try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
 
 def prepare(d,tf,sym):
     if d is None or len(d)<210:return
@@ -520,7 +521,6 @@ def normal(d,tf,sym):
 
     tr_rr = 1.2 if tf=="1H" else 1.5
 
-    # 趋势做多：加 p>e20，防止价格在 EMA20 下方逆势做多
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and p>e20 and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
@@ -535,7 +535,6 @@ def normal(d,tf,sym):
                         break
             else:
                 add("LONG","TREND",sl_c,p+5*a,tr_rr)
-    # 趋势做空：加 p<e20，防止价格在 EMA20 上方逆势做空
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
