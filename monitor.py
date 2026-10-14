@@ -106,15 +106,11 @@ def candles(sym,bar,n=300):
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
-        # 根据周期计算单根 K 线的毫秒数，判断最后一根是否已经收盘
-        bar_ms = 3600 * 1000
-        if bar == "1D":
-            bar_ms = 86400 * 1000
-        elif bar == "15m":
-            bar_ms = 15 * 60 * 1000
-        # 只有当最后一根 K 线还没收盘时，才丢弃它
-        if len(d) > 0 and (d.ts.iloc[-1] + bar_ms > int(time.time() * 1000)):
-            d = d.iloc[:-1].reset_index(drop=True)
+        bar_ms=3600*1000
+        if bar=="1D":bar_ms=86400*1000
+        elif bar=="15m":bar_ms=15*60*1000
+        if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
+            d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
     except:return
 
@@ -228,6 +224,8 @@ def mark(st,sym,tf,side,typ,d,where="sent"):
 def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
        "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER}
+    # alert_ts 优先，是真实发警报时间；没有的话用 sent_ts（K线时间）
+    if s.get("alert_ts"):e["alert_ts"]=int(s["alert_ts"])
     if s.get("sent_ts"):e["sig_ts"]=int(s["sent_ts"])
     if s.get("entry"):e["entry"]=float(s["entry"])
     if s.get("sl"):e["sl"]=float(s["sl"])
@@ -322,8 +320,9 @@ def daily_report(st):
         for r in losses:
             sym_s=r["sym"].replace("-USDT-SWAP","")
             t_str=""
-            if "sig_ts" in r:
-                t_str=datetime.fromtimestamp(r["sig_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
+            ts_show=r.get("alert_ts") or r.get("sig_ts")
+            if ts_show:
+                t_str=datetime.fromtimestamp(ts_show/1000,BJ_TZ).strftime("%m-%d %H:%M")
             dir_s=DIR.get(r.get("dir",""),"?")
             ent=r.get("entry",0)
             sl=r.get("sl",0)
@@ -358,8 +357,9 @@ def daily_report(st):
         for s,pct in live_rows:
             sym_s=s["sym"].replace("-USDT-SWAP","")
             t_str=""
-            if s.get("sent_ts"):
-                t_str=datetime.fromtimestamp(s["sent_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
+            ts_show=s.get("alert_ts") or s.get("sent_ts")
+            if ts_show:
+                t_str=datetime.fromtimestamp(ts_show/1000,BJ_TZ).strftime("%m-%d %H:%M")
             ent=s.get("entry",0) or 0
             sl=s.get("sl",0)
             tp=s.get("tp",0)
@@ -415,6 +415,9 @@ def prepare(d,tf,sym):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
+        # EMA60 距离过滤：做多必须站上 EMA60 且距离至少 0.5×ATR；做空反向
+        if side=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
+        if side=="SHORT" and (e60.iloc[-1] - p) < 0.5*av:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
@@ -435,7 +438,7 @@ def prepare(d,tf,sym):
         s+=8
         s+=14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
-        s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
+        s+=5 if (body<f.35 and ar<=1) else 3 if body<.45 else 0
         if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
         if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
 
@@ -534,7 +537,7 @@ def normal(d,tf,sym):
             else:
                 add("LONG","TREND",sl_c,p+5*a,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
+        sl_c=calc_sl_struct(d,t,p,"SHORT",a)
         risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
@@ -601,8 +604,10 @@ def send_signal(st,s):
     if post(txt):
         key=sdk(s["sym"],s["tf"],s["dir"],s["type"])
         st.setdefault("sent",{})[key]=int(s["sent_ts"])
+        # 记录真实发警报的时间
+        s["alert_ts"]=int(time.time()*1000)
         if key not in {sdk(x.get("sym",""),x.get("tf",""),x.get("dir",""),x.get("type","")) for x in st.get("live",[])}:
-            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts") if k in s})
+            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts","alert_ts") if k in s})
         log("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"])
         return True
     return False
