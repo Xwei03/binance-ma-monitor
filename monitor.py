@@ -520,7 +520,8 @@ def normal(d,tf,sym):
 
     tr_rr = 1.2 if tf=="1H" else 1.5
 
-    if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+    # 趋势做多：加 p>e20，防止价格在 EMA20 下方逆势做多
+    if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and p>e20 and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
         if risk>0:
@@ -534,7 +535,8 @@ def normal(d,tf,sym):
                         break
             else:
                 add("LONG","TREND",sl_c,p+5*a,tr_rr)
-    if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+    # 趋势做空：加 p<e20，防止价格在 EMA20 上方逆势做空
+    if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
         if risk>0:
