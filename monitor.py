@@ -661,10 +661,12 @@ def check_live(st):
 
 def scan():
     btc_cache.clear()
-    st=load_state();clean(st);daily_report(st)
+    st=load_state();clean(st)
+    check_live(st)          # 先检查止盈止损
+    save_state(st)          # 保存更新后的状态
+    daily_report(st)        # 再出日报
     ss=coins()
     if not ss:log("no coins");save_state(st);return
-    check_live(st)
 
     for tf,(bar,n,_,_) in TF.items():
         if stop:break
