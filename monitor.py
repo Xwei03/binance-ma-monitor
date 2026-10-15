@@ -2,7 +2,6 @@
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
-CODE_VER="v1.0.4"
 BASE="https://openapi.okx.com"
 WEBHOOK=os.getenv("FEISHU_WEBHOOK","")
 PROXY=os.getenv("OKX_PROXY","")
@@ -223,7 +222,7 @@ def mark(st,sym,tf,side,typ,d,where="sent"):
 
 def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
-       "type":s["type"],"result":r,"ts":int(time.time()),"ver":CODE_VER,
+       "type":s["type"],"result":r,"ts":int(time.time()),
        "rec_ts":int(time.time()*1000)}
     if s.get("alert_ts"):e["alert_ts"]=int(s["alert_ts"])
     if s.get("sent_ts"):e["sig_ts"]=int(s["sent_ts"])
@@ -283,7 +282,7 @@ def daily_report(st):
     if n.hour>=12:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
-    L=[f"宝宝巴士🚌上车就赚 ({CODE_VER})","📊 每日统计（警报）"];tw=tl=te=tto=0
+    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=tto=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
@@ -418,6 +417,8 @@ def prepare(d,tf,sym):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
+        if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
+        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
         if side=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
         if side=="SHORT" and (e60.iloc[-1] - p) < 0.5*av:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
@@ -597,7 +598,7 @@ def signal(d,tf,sym):
 def send_signal(st,s):
     t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
     stt="贴均线埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
-    txt=(f"宝宝巴士🚌上车就赚 {CODE_VER}\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
+    txt=(f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
          f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
          f"入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n"
          f"{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
