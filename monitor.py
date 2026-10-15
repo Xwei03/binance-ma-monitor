@@ -441,8 +441,6 @@ def prepare(d,tf,sym):
         s+=14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
-        if side=="LONG" and e20.iloc[-1]<e20.iloc[-5]:s-=10
-        if side=="SHORT" and e20.iloc[-1]>e20.iloc[-5]:s-=10
 
         need=73 if tf=="1H" else 72
         need_rr=1.5 if tf=="1H" else 2.0
@@ -662,9 +660,9 @@ def check_live(st):
 def scan():
     btc_cache.clear()
     st=load_state();clean(st)
-    check_live(st)          # 先检查止盈止损
-    save_state(st)          # 保存更新后的状态
-    daily_report(st)        # 再出日报
+    check_live(st)
+    save_state(st)
+    daily_report(st)
     ss=coins()
     if not ss:log("no coins");save_state(st);return
 
