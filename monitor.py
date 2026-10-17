@@ -1,5 +1,5 @@
-HTML# 宝宝巴士🚌上车就赚, - OKX 信号扫描 ( like1H/1D)
-import os Gecko),time,json,random,requests,pandas as pd
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D)
+import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
 BASE="https://openapi.okx.com"
@@ -13,7 +13,7 @@ UAS=[
  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
- "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (K Version/17.1 Mobile/15E148 Safari/604.1",
+ "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
 ]
 
 def hdr():
@@ -101,7 +101,7 @@ def candles(sym,bar,n=300):
     x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
     if not x:return
     try:
-        d=pd.DataFrame([[int(a[0]),*map(float,a[1:6]),a[8]] for a in reversed(x)],
+        d=pd.DataFrame([[int(a[0]),float(a[1]),float(a[2]),float(a[3]),float(a[4]),float(a[5]),a[8]] for a in reversed(x)],
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
@@ -111,7 +111,8 @@ def candles(sym,bar,n=300):
         if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
             d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
-    except:return
+    except Exception as e:
+        return
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
@@ -207,13 +208,10 @@ def h4_filter(sym):
     if pd.isna(a4) or a4<=0:return 0
     o=d4.o.iloc[-1]
     c=d4.c.iloc[-1]
-    # 用整根K线的振幅（High - Low）来判断异动
     amp=d4.h.iloc[-1]-d4.l.iloc[-1]
-    
-    # 如果振幅异常放大，且方向是暴涨/暴跌
     if amp > 1.5*a4:
-        if c>o:return 1   # 爆大阳
-        if c<o:return -1  # 爆大阴
+        if c>o:return 1
+        if c<o:return -1
     return 0
 
 def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
@@ -428,7 +426,6 @@ def prepare(d,tf,sym):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         
-        # 4H 防爆过滤
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
 
@@ -532,7 +529,6 @@ def normal(d,tf,sym):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
         
-        # 4H 防爆过滤
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
