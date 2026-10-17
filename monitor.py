@@ -237,7 +237,7 @@ def mark(st,sym,tf,side,typ,d,where="sent"):
 def rec(st,s,r,mfe=None,mfe_pct=None):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
        "type":s["type"],"result":r,"ts":int(time.time()),
-       "rec_ts":int(time.time()*1000)}
+       "rec_ts":int(time.time()*1000),"score":s.get("score",0)}
     if s.get("alert_ts"):e["alert_ts"]=int(s["alert_ts"])
     if s.get("sent_ts"):e["sig_ts"]=int(s["sent_ts"])
     if s.get("entry"):e["entry"]=float(s["entry"])
@@ -343,7 +343,8 @@ def daily_report(st):
             ent=r.get("entry",0)
             sl=r.get("sl",0)
             tp=r.get("tp",0)
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {dir_s} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} 扫损{loss_str}")
+            sc=r.get("score",0)
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {dir_s} 分数{sc} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} 扫损{loss_str}")
     live_rows=[]
     for s in lv:
         tf=s.get("tf")
@@ -379,7 +380,8 @@ def daily_report(st):
             ent=s.get("entry",0) or 0
             sl=s.get("sl",0)
             tp=s.get("tp",0)
-            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} 进度{pct*100:.0f}% 开仓{t_str}")
+            sc=s.get("score",0)
+            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 分数{sc} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} 进度{pct*100:.0f}% 开仓{t_str}")
     if post_long(L):
         st["last_report"]=today;log("DAILY_REPORT",tw,tl,te,tto,len(lv))
     else:
