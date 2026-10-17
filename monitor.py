@@ -1,5 +1,5 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D)
-import os,time,json,random,requests,pandas as pd
+HTML# 宝宝巴士🚌上车就赚, - OKX 信号扫描 ( like1H/1D)
+import os Gecko),time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
 BASE="https://openapi.okx.com"
@@ -13,7 +13,7 @@ UAS=[
  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
- "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+ "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (K Version/17.1 Mobile/15E148 Safari/604.1",
 ]
 
 def hdr():
@@ -201,14 +201,19 @@ def btc(bar):
     btc_cache[bar]=v;return v
 
 def h4_filter(sym):
-    d4=candles(sym,"4H",20)
-    if d4 is None or len(d4)==0:return 0
+    d4=candles(sym,"4H",30)
+    if d4 is None or len(d4)<15:return 0
+    a4=atr(d4).iloc[-1]
+    if pd.isna(a4) or a4<=0:return 0
     o=d4.o.iloc[-1]
     c=d4.c.iloc[-1]
-    if o==0:return 0
-    chg=(c-o)/o
-    if chg>0.015:return 1
-    if chg<-0.015:return -1
+    # 用整根K线的振幅（High - Low）来判断异动
+    amp=d4.h.iloc[-1]-d4.l.iloc[-1]
+    
+    # 如果振幅异常放大，且方向是暴涨/暴跌
+    if amp > 1.5*a4:
+        if c>o:return 1   # 爆大阳
+        if c<o:return -1  # 爆大阴
     return 0
 
 def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
@@ -423,7 +428,7 @@ def prepare(d,tf,sym):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         
-        # 新增: 4H 防爆过滤
+        # 4H 防爆过滤
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
 
@@ -527,7 +532,7 @@ def normal(d,tf,sym):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
         
-        # 新增: 4H 防爆过滤
+        # 4H 防爆过滤
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
