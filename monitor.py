@@ -200,6 +200,17 @@ def btc(bar):
     v=15 if (e20>e60 and p>e20) else -15 if (e20<e60 and p<e20) else 0
     btc_cache[bar]=v;return v
 
+def h4_filter(sym):
+    d4=candles(sym,"4H",20)
+    if d4 is None or len(d4)==0:return 0
+    o=d4.o.iloc[-1]
+    c=d4.c.iloc[-1]
+    if o==0:return 0
+    chg=(c-o)/o
+    if chg>0.015:return 1
+    if chg<-0.015:return -1
+    return 0
+
 def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
 
 def load_state():
@@ -401,6 +412,7 @@ def prepare(d,tf,sym):
     ar=av/base
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],av*.01)
     bs=btc(TF[tf][0])
+    h4_bias=h4_filter(sym)
     out=[]
 
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
@@ -410,6 +422,11 @@ def prepare(d,tf,sym):
     for side in ("LONG","SHORT"):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
+        
+        # 新增: 4H 防爆过滤
+        if side=="LONG" and h4_bias==-1:continue
+        if side=="SHORT" and h4_bias==1:continue
+
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
             if d_e20<0 or d_e20>gap_max:continue
@@ -495,7 +512,9 @@ def normal(d,tf,sym):
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
     body_prev=abs(d.c.iloc[-2]-d.o.iloc[-2])/max(d.h.iloc[-2]-d.l.iloc[-2],a*.01)
-    bs=btc(TF[tf][0]);out=[]
+    bs=btc(TF[tf][0])
+    h4_bias=h4_filter(sym)
+    out=[]
 
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
@@ -507,6 +526,11 @@ def normal(d,tf,sym):
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
+        
+        # 新增: 4H 防爆过滤
+        if side=="LONG" and h4_bias==-1:return
+        if side=="SHORT" and h4_bias==1:return
+        
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
