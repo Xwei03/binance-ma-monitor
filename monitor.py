@@ -325,6 +325,26 @@ def daily_report(st):
     ta=sum(alltm)/len(alltm) if alltm else 0
     L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # 新增：止盈明细
+    wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
+    wins.sort(key=lambda x:-x.get("score",0)) # 按分数降序
+    if wins:
+        L.append("")
+        L.append(f"🏆 止盈明细（{len(wins)}条，按分数降序）：")
+        for r in wins:
+            sym_s=r["sym"].replace("-USDT-SWAP","")
+            t_str=""
+            ts_show=r.get("alert_ts") or r.get("sig_ts")
+            if ts_show:
+                t_str=datetime.fromtimestamp(ts_show/1000,BJ_TZ).strftime("%m-%d %H:%M")
+            dir_s=DIR.get(r.get("dir",""),"?")
+            ent=r.get("entry",0)
+            sl=r.get("sl",0)
+            tp=r.get("tp",0)
+            sc=r.get("score",0)
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {dir_s} 分数{sc} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
+
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-(x.get("mfe_pct",0)))
     if losses:
