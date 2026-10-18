@@ -22,14 +22,10 @@ def hdr():
             "Referer":"https://www.okx.com/"}
 
 def now_bj():return datetime.now(BJ_TZ)
-
 def log(*args):print(*args)
 
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
-DIST={"1H":.025,"1D":.04}
 MAX_HOLD={"1H":100,"1D":30}
-TREND_SL={"1H":2.0,"1D":2.5}
-MAX_SL={"1H":0.025,"1D":0.05}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR=2.5
 GAP_CAP={"1H":0.04,"1D":0.10}
@@ -108,11 +104,12 @@ def candles(sym,bar,n=300):
         bar_ms=3600*1000
         if bar=="1D":bar_ms=86400*1000
         elif bar=="15m":bar_ms=15*60*1000
+        elif bar=="5m":bar_ms=5*60*1000
+        elif bar=="1m":bar_ms=1*60*1000
         if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
             d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
-    except Exception as e:
-        return
+    except:return
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
@@ -140,8 +137,7 @@ def find_swing_levels(d,tf,p,side):
                 hits=int(((arr_h>price-tol)&(arr_h<price+tol)).sum())
                 vol_ratio=arr_v[i]/avg_vol
                 time_weight=1+(i/m)
-                score=vol_ratio*time_weight+hits*0.5
-                cands.append((price,score))
+                cands.append((price,vol_ratio*time_weight+hits*0.5))
     else:
         for i in range(n_l,m-n_r):
             if arr_l[i]<=arr_l[i-n_l:i].min() and arr_l[i]<=arr_l[i+1:i+n_r+1].min() and arr_l[i]<p:
@@ -150,8 +146,7 @@ def find_swing_levels(d,tf,p,side):
                 hits=int(((arr_l>price-tol)&(arr_l<price+tol)).sum())
                 vol_ratio=arr_v[i]/avg_vol
                 time_weight=1+(i/m)
-                score=vol_ratio*time_weight+hits*0.5
-                cands.append((price,score))
+                cands.append((price,vol_ratio*time_weight+hits*0.5))
     if not cands:return []
     cands.sort(key=lambda x:-x[1])
     used=[False]*len(cands)
@@ -177,21 +172,15 @@ def calc_sl_struct(d,tf,p,side,a):
     if side=="LONG":
         sup_list=find_swing_levels(d,tf,p,"sup")
         sup=sup_list[0][0] if sup_list else None
-        if sup is None:
-            return p - sl_cap
+        if sup is None:return p - sl_cap
         sl_c = sup - buf
-        if (p - sl_c) > sl_cap:
-            return p - sl_cap
-        return sl_c
+        return p - sl_cap if (p - sl_c) > sl_cap else sl_c
     else:
         res_list=find_swing_levels(d,tf,p,"res")
         res=res_list[0][0] if res_list else None
-        if res is None:
-            return p + sl_cap
+        if res is None:return p + sl_cap
         sl_c = res + buf
-        if (sl_c - p) > sl_cap:
-            return p + sl_cap
-        return sl_c
+        return p + sl_cap if (sl_c - p) > sl_cap else sl_c
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
@@ -206,12 +195,9 @@ def h4_filter(sym):
     if d4 is None or len(d4)<15:return 0
     a4=atr(d4).iloc[-1]
     if pd.isna(a4) or a4<=0:return 0
-    o=d4.o.iloc[-1]
-    c=d4.c.iloc[-1]
-    amp=d4.h.iloc[-1]-d4.l.iloc[-1]
+    o=d4.o.iloc[-1];c=d4.c.iloc[-1];amp=d4.h.iloc[-1]-d4.l.iloc[-1]
     if amp > 1.5*a4:
-        if c>o:return 1
-        if c<o:return -1
+        return 1 if c>o else -1 if c<o else 0
     return 0
 
 def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
@@ -235,8 +221,7 @@ def mark(st,sym,tf,side,typ,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
 
 def rec(st,s,r,mfe=None,mfe_pct=None):
-    e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],
-       "type":s["type"],"result":r,"ts":int(time.time()),
+    e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],"type":s["type"],"result":r,"ts":int(time.time()),
        "rec_ts":int(time.time()*1000),"score":s.get("score",0)}
     if s.get("alert_ts"):e["alert_ts"]=int(s["alert_ts"])
     if s.get("sent_ts"):e["sig_ts"]=int(s["sent_ts"])
@@ -256,10 +241,10 @@ def post(txt):
             except:res={}
             if r.status_code==200 and res.get("code")==0:return True
             if r.status_code==429:
-                log(f"[飞书] 限流 重试{i+1}/3");time.sleep(min(5*2**i,30));continue
-            log(f"[飞书] 被拒 HTTP:{r.status_code} {r.text[:150]}");return False
+                time.sleep(min(5*2**i,30));continue
+            return False
         except Exception as e:
-            log(f"[飞书] {type(e).__name__}");time.sleep(2*(i+1))
+            time.sleep(2*(i+1))
     return False
 
 def post_long(lines,max_len=1500,gap=2.0):
@@ -267,19 +252,13 @@ def post_long(lines,max_len=1500,gap=2.0):
     for line in lines:
         l=len(line)+1
         if cur_len+l>max_len and cur:
-            batches.append(cur)
-            cur=[];cur_len=0
+            batches.append(cur);cur=[];cur_len=0
         cur.append(line);cur_len+=l
     if cur:batches.append(cur)
-    total=len(batches)
-    ok=True
+    total=len(batches);ok=True
     for idx,batch in enumerate(batches,1):
-        if total>1:
-            header=f"🚨 警报 日报（第{idx}/{total}批）"
-            body=header+"\n"+"\n".join(batch)
-        else:
-            body="\n".join(batch)
-        if not post(body):ok=False
+        header=f"🚨 警报 日报（第{idx}/{total}批）\n" if total>1 else ""
+        if not post(header+"\n".join(batch)):ok=False
         if idx<total:time.sleep(gap)
     return ok
 
@@ -292,8 +271,7 @@ def clean(st):
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
-    if st.get("last_report")==today:return
-    if n.hour>=12:return
+    if st.get("last_report")==today or n.hour>=12:return
     cut=int(time.time())-86400
     rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
     L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=tto=0
@@ -308,10 +286,8 @@ def daily_report(st):
         lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
         tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
         lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
-        wa=sum(wm)/len(wm) if wm else 0
-        la=sum(lm)/len(lm) if lm else 0
-        lpa=sum(lmp)/len(lmp) if lmp else 0
-        ta=sum(tm)/len(tm) if tm else 0
+        wa=sum(wm)/len(wm) if wm else 0;la=sum(lm)/len(lm) if lm else 0
+        lpa=sum(lmp)/len(lmp) if lmp else 0;ta=sum(tm)/len(tm) if tm else 0
         t=w+l;tw+=w;tl+=l;te+=e;tto+=to
         L.append(f"警报 {lb}：止盈{w} 止损{l} 错误{e} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     tt=tw+tl
@@ -319,52 +295,30 @@ def daily_report(st):
     alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
     alltm=[r["mfe"] for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
     alllmp=[r["mfe_pct"] for r in rs if r["result"]=="LOSS" and "mfe_pct" in r]
-    wa=sum(allwm)/len(allwm) if allwm else 0
-    la=sum(alllm)/len(alllm) if alllm else 0
-    lpa=sum(alllmp)/len(alllmp) if alllmp else 0
-    ta=sum(alltm)/len(alltm) if alltm else 0
+    wa=sum(allwm)/len(allwm) if allwm else 0;la=sum(alllm)/len(alllm) if alllm else 0
+    lpa=sum(alllmp)/len(alllmp) if alllmp else 0;ta=sum(alltm)/len(alltm) if alltm else 0
     L.append(f"警报 合计：止盈{tw} 止损{tl} 错误{te} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # 新增：止盈明细
     wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
-    wins.sort(key=lambda x:-x.get("score",0)) # 按分数降序
+    wins.sort(key=lambda x:-x.get("score",0))
     if wins:
-        L.append("")
-        L.append(f"🏆 止盈明细（{len(wins)}条，按分数降序）：")
+        L.append(f"\n🏆 止盈明细（{len(wins)}条，按分数降序）：")
         for r in wins:
             sym_s=r["sym"].replace("-USDT-SWAP","")
-            t_str=""
-            ts_show=r.get("alert_ts") or r.get("sig_ts")
-            if ts_show:
-                t_str=datetime.fromtimestamp(ts_show/1000,BJ_TZ).strftime("%m-%d %H:%M")
-            dir_s=DIR.get(r.get("dir",""),"?")
-            ent=r.get("entry",0)
-            sl=r.get("sl",0)
-            tp=r.get("tp",0)
-            sc=r.get("score",0)
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {dir_s} 分数{sc} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
+            t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
 
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-(x.get("mfe_pct",0)))
     if losses:
-        L.append("")
-        L.append(f"📋 止损明细（{len(losses)}条，按止盈进度降序，止盈=100%）：")
+        L.append(f"\n📋 止损明细（{len(losses)}条，按止盈进度降序，止盈=100%）：")
         for r in losses:
             sym_s=r["sym"].replace("-USDT-SWAP","")
-            t_str=""
-            ts_show=r.get("alert_ts") or r.get("sig_ts")
-            if ts_show:
-                t_str=datetime.fromtimestamp(ts_show/1000,BJ_TZ).strftime("%m-%d %H:%M")
-            loss_str=""
-            if r.get("rec_ts"):
-                loss_str=datetime.fromtimestamp(r["rec_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M")
-            dir_s=DIR.get(r.get("dir",""),"?")
-            ent=r.get("entry",0)
-            sl=r.get("sl",0)
-            tp=r.get("tp",0)
-            sc=r.get("score",0)
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {dir_s} 分数{sc} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} 扫损{loss_str}")
+            t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
+            loss_str=datetime.fromtimestamp(r["rec_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M") if r.get("rec_ts") else ""
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} 扫损{loss_str}")
+            
     live_rows=[]
     for s in lv:
         tf=s.get("tf")
@@ -374,41 +328,29 @@ def daily_report(st):
         ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])
         f=d[d.ts>ts0]
         if len(f)==0:continue
-        hi=f.h.max();lo=f.l.min()
-        ent=s.get("entry",0) or 0
-        tp_v=s.get("tp",0) or 0
-        side=s["dir"]
+        ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0;side=s["dir"]
         if ent and tp_v:
-            if side=="LONG":
-                tpd=tp_v-ent;mfp=hi-ent
-            else:
-                tpd=ent-tp_v;mfp=ent-lo
+            tpd=tp_v-ent if side=="LONG" else ent-tp_v
+            mfp=f.h.max()-ent if side=="LONG" else ent-f.l.min()
             mfe_pct=mfp/tpd if tpd>0 else 0
-        else:
-            mfe_pct=0
+        else:mfe_pct=0
         live_rows.append((s,mfe_pct))
     live_rows.sort(key=lambda x:-x[1])
     if live_rows:
-        L.append("")
-        L.append(f"📋 在追明细（{len(live_rows)}条，按止盈进度降序）：")
+        L.append(f"\n📋 在追明细（{len(live_rows)}条，按止盈进度降序）：")
         for s,pct in live_rows:
             sym_s=s["sym"].replace("-USDT-SWAP","")
-            t_str=""
-            ts_show=s.get("alert_ts") or s.get("sent_ts")
-            if ts_show:
-                t_str=datetime.fromtimestamp(ts_show/1000,BJ_TZ).strftime("%m-%d %H:%M")
-            ent=s.get("entry",0) or 0
-            sl=s.get("sl",0)
-            tp=s.get("tp",0)
-            sc=s.get("score",0)
-            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 分数{sc} 入场{ent:.8g} 止损{sl:.8g} 止盈{tp:.8g} 进度{pct*100:.0f}% 开仓{t_str}")
+            t_str=datetime.fromtimestamp((s.get("alert_ts") or s.get("sent_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (s.get("alert_ts") or s.get("sent_ts")) else ""
+            L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 分数{s.get('score',0)} 入场{s.get('entry',0):.8g} 止损{s.get('sl',0):.8g} 止盈{s.get('tp',0):.8g} 进度{pct*100:.0f}% 开仓{t_str}")
+            
     if post_long(L):
         st["last_report"]=today;log("DAILY_REPORT",tw,tl,te,tto,len(lv))
-    else:
-        log("DAILY_REPORT 发送失败，不更新 last_report，下轮重试")
+    else:log("DAILY_REPORT 发送失败")
 
-def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
-    d=candles(sym,bar,lim)
+def try_res(sym,bar,side,sl,tp,ts0,ts1):
+    bar_ms = {"1m": 60*1000, "5m": 5*60*1000, "15m": 15*60*1000, "1H": 3600*1000}
+    need = int((ts1 - ts0) / bar_ms[bar]) + 10
+    d=candles(sym,bar,min(need, 300))
     if d is None:return None
     f=d[(d.ts>ts0)&(d.ts<=ts1)]
     if len(f)==0:return None
@@ -420,11 +362,9 @@ def try_res(sym,bar,lim,side,sl,tp,ts0,ts1):
     return None
 
 def resolve(sym,side,sl,tp,ts0,ts1,tf):
-    if tf=="1D":
-        r=try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
-        return r if r is not None else try_res(sym,"1H",300,side,sl,tp,ts0,ts1)
-    r=try_res(sym,"1m",300,side,sl,tp,ts0,ts1)
-    return r if r is not None else try_res(sym,"5m",300,side,sl,tp,ts0,ts1)
+    for b in ["1m","5m","15m"]:
+        r=try_res(sym,b,side,sl,tp,ts0,ts1)
+        if r is not None: return r
 
 def prepare(d,tf,sym):
     if d is None or len(d)<210:return
@@ -447,10 +387,8 @@ def prepare(d,tf,sym):
     for side in ("LONG","SHORT"):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
-        
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
-
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
             if d_e20<0 or d_e20>gap_max:continue
@@ -466,21 +404,13 @@ def prepare(d,tf,sym):
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6]):continue
         if side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6]):continue
-        s=0
-        s+=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
+        
+        s=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
         if tf=="1H":
-            if d_e20<=.005:s+=22
-            elif d_e20<=.010:s+=18
-            elif d_e20<=.020:s+=12
-            else:s+=4
+            s+=22 if d_e20<=.005 else 18 if d_e20<=.010 else 12 if d_e20<=.020 else 4
         else:
-            if d_e20<=.015:s+=22
-            elif d_e20<=.030:s+=18
-            elif d_e20<=.060:s+=12
-            else:s+=4
-        s+=15
-        s+=8
-        s+=14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4
+            s+=22 if d_e20<=.015 else 18 if d_e20<=.030 else 12 if d_e20<=.060 else 4
+        s+=23 + (14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4)
         s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
 
@@ -488,42 +418,28 @@ def prepare(d,tf,sym):
         need_rr=1.5 if tf=="1H" else 2.0
 
         if side=="LONG":
-            sl=calc_sl_struct(d,tf,p,"LONG",av)
-            risk=p-sl
+            sl=calc_sl_struct(d,tf,p,"LONG",av);risk=p-sl
             if risk<=0:continue
-            cands=find_swing_levels(d,tf,p,"res")
-            tp=None
+            cands=find_swing_levels(d,tf,p,"res");tp=None
             for price,_ in cands:
                 cd=price*disc_l
-                if cd<=p:continue
-                rr_c=(cd-p)/risk
-                if rr_c>=need_rr:
-                    tp=cd
-                    break
-            if tp is None:
-                tp=p+2.0*risk if tf!="1H" else p+2.2*risk
+                if cd>p and (cd-p)/risk>=need_rr:
+                    tp=cd;break
+            if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
-            sl=calc_sl_struct(d,tf,p,"SHORT",av)
-            risk=sl-p
+            sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
             if risk<=0:continue
-            cands=find_swing_levels(d,tf,p,"sup")
-            tp=None
+            cands=find_swing_levels(d,tf,p,"sup");tp=None
             for price,_ in cands:
                 cd=price*disc_s
-                if cd>=p:continue
-                rr_c=(p-cd)/risk
-                if rr_c>=need_rr:
-                    tp=cd
-                    break
-            if tp is None:
-                tp=p-2.0*risk if tf!="1H" else p-2.2*risk
+                if cd<p and (p-cd)/risk>=need_rr:
+                    tp=cd;break
+            if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),
-                        "entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),
-                        "hi":0.0,"lo":0.0})
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym):
@@ -536,43 +452,35 @@ def normal(d,tf,sym):
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     body=abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01)
     body_prev=abs(d.c.iloc[-2]-d.o.iloc[-2])/max(d.h.iloc[-2]-d.l.iloc[-2],a*.01)
-    bs=btc(TF[tf][0])
-    h4_bias=h4_filter(sym)
+    bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
-
     gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
-    max_sl = MAX_SL.get(tf,0.025)
     chase_atr = CHASE_ATR.get(tf,2.5)
 
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
-        
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
-        
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
         if rr<=0:return
-        if typ=="TREND":
-            v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
-        else:
-            v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
+        if typ=="TREND": v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
+        else: v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
         if rr>=need_rr and s>=TF[tf][2]:
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),
-                        "entry":p,"sl":sl,"tp":tp,"rr":rr})
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
 
-    tr_rr = 1.2 if tf=="1H" else 1.5
+    # 【核心修改】：1H 趋势的 RR 门槛从 1.2 统一提高到了 1.5
+    tr_rr = 1.5 
 
     if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and p>e20 and (p-e20)/p<gap_max:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a)
-        risk=p-sl_c
+        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
             if cands:
@@ -580,13 +488,10 @@ def normal(d,tf,sym):
                     if price<=p:continue
                     tp_c=min(price*disc_l, p+5*a)
                     if (tp_c-p)/risk>=tr_rr:
-                        add("LONG","TREND",sl_c,tp_c,tr_rr)
-                        break
-            else:
-                add("LONG","TREND",sl_c,p+5*a,tr_rr)
+                        add("LONG","TREND",sl_c,tp_c,tr_rr);break
+            else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
-        risk=sl_c-p
+        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
             if cands:
@@ -594,15 +499,12 @@ def normal(d,tf,sym):
                     if price>=p:continue
                     tp_c=max(price*disc_s, p-5*a)
                     if (p-tp_c)/risk>=tr_rr:
-                        add("SHORT","TREND",sl_c,tp_c,tr_rr)
-                        break
-            else:
-                add("SHORT","TREND",sl_c,p-5*a,tr_rr)
+                        add("SHORT","TREND",sl_c,tp_c,tr_rr);break
+            else: add("SHORT","TREND",sl_c,p-5*a,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a)
-        risk=p-sl_c
+        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             base_tp=p+1.5*risk
             cands=find_swing_levels(d,tf,p,"res")
@@ -613,13 +515,10 @@ def normal(d,tf,sym):
                     if cd>p:
                         tp_use=min(cd,base_tp)
                         if (tp_use-p)/risk>=1.5:
-                            add("LONG","BREAKOUT",sl_c,tp_use,1.5)
-                            break
-            else:
-                add("LONG","BREAKOUT",sl_c,base_tp,1.5)
+                            add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
+            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
-        risk=sl_c-p
+        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             base_tp=p-1.5*risk
             cands=find_swing_levels(d,tf,p,"sup")
@@ -630,20 +529,17 @@ def normal(d,tf,sym):
                     if cd<p:
                         tp_use=max(cd,base_tp)
                         if (p-tp_use)/risk>=1.5:
-                            add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
-                            break
-            else:
-                add("SHORT","BREAKOUT",sl_c,base_tp,1.5)
+                            add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
+            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
-    p=prepare(d,tf,sym)
-    n=normal(d,tf,sym)
+    p=prepare(d,tf,sym);n=normal(d,tf,sym)
     if p and n:return p if p["score"]>=n["score"] else n
     return p or n
 
 def send_signal(st,s):
-    t=("🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号")
+    t="🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号"
     stt="贴均线埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
     txt=(f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n"
          f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n"
@@ -669,37 +565,36 @@ def check_live(st):
         ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])
         f=d[d.ts>ts0]
         if len(f)==0:keep.append(s);continue
-        hi=f.h.max();lo=f.l.min()
+        
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
-        ent=s.get("entry",0) or 0
-        tp_v=s.get("tp",0) or 0
-        hs=(lo<=sl) if side=="LONG" else (hi>=sl)
-        ht=(hi>=tp) if side=="LONG" else (lo<=tp)
+        ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
+        
+        res_status = None
+        for _, r in f.iterrows():
+            hs = (r.l <= sl) if side == "LONG" else (r.h >= sl)
+            ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
+            if hs and ht:
+                r_res = resolve(s["sym"], side, sl, tp, int(r.ts)-3600*1000, int(r.ts), tf)
+                res_status = "LOSS" if r_res == "LOSS" else "WIN"
+                break
+            elif ht: res_status = "WIN"; break
+            elif hs: res_status = "LOSS"; break
+        
+        hi=f.h.max();lo=f.l.min()
         mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if ent and tp_v:
-            if side=="LONG":
-                tpd=tp_v-ent;mfp=hi-ent
-            else:
-                tpd=ent-tp_v;mfp=ent-lo
+            tpd=tp_v-ent if side=="LONG" else ent-tp_v
+            mfp=hi-ent if side=="LONG" else ent-lo
             mfe_pct=mfp/tpd if tpd>0 else 0
-        else:
-            mfe_pct=0
-        if hs and ht:
-            r=resolve(s["sym"],side,sl,tp,ts0,int(time.time()*1000),tf)
-            mark(st,s["sym"],tf,side,typ,d,"cool")
-            if r is None:
-                rec(st,s,"ERROR",mfe,mfe_pct);log("ERR",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
-            elif r=="LOSS":
-                rec(st,s,"LOSS",mfe,mfe_pct);log("SLsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
-            else:
-                rec(st,s,"WIN",mfe,mfe_pct);log("TPsub",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
-            continue
-        if ht:
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
-            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
-        if hs:
+        else:mfe_pct=0
+            
+        if res_status == "LOSS":
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,mfe_pct)
             log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
+        if res_status == "WIN":
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
+            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
+            
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
             rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         keep.append(s)
@@ -716,8 +611,7 @@ def scan():
 
     for tf,(bar,n,_,_) in TF.items():
         if stop:break
-        if not tf_run(tf):
-            log(f"[{tf}] 跳过");continue
+        if not tf_run(tf):continue
         log(f"[扫描] {tf}")
         hits=[]
         for sym in ss:
