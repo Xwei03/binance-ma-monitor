@@ -24,13 +24,13 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 1H 的 ATR 倍数放宽到 2.0，1D 保持 2.5 不变
+# 趋势：1H 偏离度改回 2.0，封顶 2%。1D 不变。
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":24,"1D":7}
 CHASE_ATR={"1H":2.5,"1D":1.5}
-GAP_ATR={"1H":2.0,"1D":2.5}
+GAP_ATR={"1H":2.0,"1D":2.5} # <--- 修改点：1H从1.5改回2.0
 GAP_CAP={"1H":0.02,"1D":0.10}
-PREPARE_GAP_ATR=2.0 # 埋伏单的 ATR 倍数也放宽到 2.0
+PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
@@ -739,7 +739,6 @@ def scan():
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
                 
-                # 【核心防重发】只要在追列表里有这个币，绝对不发
                 in_live = False
                 for lv_item in st.get("live", []):
                     if lv_item.get("sym") == s["sym"] and lv_item.get("tf") == tf:
