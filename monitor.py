@@ -27,8 +27,8 @@ def log(*args):print(*args)
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
-GAP_ATR=2.5
-GAP_CAP={"1H":0.04,"1D":0.10}
+GAP_ATR={"1H":1.5,"1D":2.5}
+GAP_CAP={"1H":0.02,"1D":0.10}
 PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
@@ -296,10 +296,8 @@ def daily_report(st):
         lpa=sum(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         
-        # 胜率 = 止盈 / (止盈 + 止损 + 超时)
         t = w + l + to
         tw+=w; tl+=l; tbe+=be; te+=e; tto+=to
-        
         L.append(f"警报 {lb}：止盈{w} 保本{be} 止损{l} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
         
     tt = tw + tl + tto
@@ -314,7 +312,6 @@ def daily_report(st):
     L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # 把止盈和保本分开列
     wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
     wins.sort(key=lambda x:-x.get("score",0))
     if wins:
@@ -324,7 +321,6 @@ def daily_report(st):
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
 
-    # 新增：保本明细
     bes=[r for r in rs if r["result"]=="BE" and "mfe" in r]
     bes.sort(key=lambda x:-x.get("score",0))
     if bes:
@@ -406,9 +402,6 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    recent_lo = d.l.iloc[-12:-1].min()
-    recent_hi = d.h.iloc[-12:-1].max()
-
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
@@ -418,8 +411,6 @@ def prepare(d,tf,sym):
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
-        if side=="SHORT" and (p - recent_lo) < 1.0 * av: continue
-        if side=="LONG" and (recent_hi - p) < 1.0 * av: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -487,12 +478,9 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
-    recent_lo = d.l.iloc[-12:-1].min()
-    recent_hi = d.h.iloc[-12:-1].max()
-
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
-    gap_max = min(GAP_ATR * a / p, GAP_CAP.get(tf,0.04))
+    gap_max = min(GAP_ATR.get(tf, 2.5) * a / p, GAP_CAP.get(tf,0.04))
     chase_atr = CHASE_ATR.get(tf,2.5)
 
     def add(side,typ,sl,tp,need_rr):
@@ -500,9 +488,6 @@ def normal(d,tf,sym):
         if side=="SHORT" and p>=d.o.iloc[-1]:return
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
-        if side=="SHORT" and (p - recent_lo) < 1.0 * a: return
-        if side=="LONG" and (recent_hi - p) < 1.0 * a: return
-
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
@@ -607,7 +592,6 @@ def check_live(st):
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
         
-        # 5% 锁盈价
         be_price = ent * 1.05 if side=="LONG" else ent * 0.95 if ent else 0
         is_be_notified = s.get("be_sent", False)
         
