@@ -279,27 +279,27 @@ def daily_report(st):
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
-        sub=[r{ for r in rs if r.getbe("tf")==tf and} r.get("type")==typ]
-         w=sum(1 for r in止损 sub if r["result"]=="WIN")
-       {l l=sum(1 for r in} sub if r["result"]=="LOSS ")
-        be=sum(1 for r超 in sub if r["result"]=="BE")
-       时 e=sum(1 for r in sub if{ r["result"]=="ERROR")
-       to to=sum(1 for r in}( sub if r["result"]=="不计TIMEOUT")
-        p胜=sum(1 for x in l率v if x.get("tf")==) 在追{ptf and x.get("type")}==typ)
+        sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
+        w=sum(1 for r in sub if r["result"]=="WIN")
+        l=sum(1 for r in sub if r["result"]=="LOSS")
+        be=sum(1 for r in sub if r["result"]=="BE")
+        e=sum(1 for r in sub if r["result"]=="ERROR")
+        to=sum(1 for r in sub if r["result"]=="TIMEOUT")
+        p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
         
-        wm=[ r["mfe"] for r in sub胜 if r["result"]=="WIN" and率 "mfe" in r]
-        lm=[r["{(mfe"] for r in sub if r["wresult"]=="LOSS" and "m/tfe" in r]
-        tm=[r*["mfe"] for r in sub if100 r["result"]=="TIMEOUT") and "mfe" in r if]
-        lmp=[r["mfe t_pct"] for r in sub if r else["result"]=="LOSS"  and "mfe_pct"0 in r]
+        wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
+        lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
+        tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
+        lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
         
-        wa=sum:.(wm)/len(wm) if w0m else 0
-        la=sum(lfm)/len(lm) if lm else} 0
-        lpa=sum%(lmp)/len(lmp) if lmp else 0
+        wa=sum(wm)/len(wm) if wm else 0
+        la=sum(lm)/len(lm) if lm else 0
+        lpa=sum(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         
         t = w + l
         tw+=w; tl+=l; tbe+=be; te+=e; tto+=to
-        L.append(f"警报 {lb}：止盈{w} 保本 MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 保本{be} 止损{l} 超时{to}(不计胜率) 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
         
     tt = tw + tl
     allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
@@ -413,9 +413,25 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    d4 = candles(sym, "4H", 30)
-    h4_recent_lo = d4.l.iloc[-24:-1].min() if d4 is not None and len(d4)>=25 else 0
-    h4_recent_hi = d4.h.iloc[-24:-1].max() if d4 is not None and len(d4)>=25 else 0
+    d4 = candles(sym, "4H", 50)
+    h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0 # 7天
+    h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
+
+    d1 = candles(sym, "1H", 30)
+    h1_recent_lo = d1.l.iloc[-24:-1].min() if d1 is not None and len(d1)>=25 else 0 # 1天局部
+    h1_recent_hi = d1.h.iloc[-24:-1].max() if d1 is not None and len(d1)>=25 else 0
+
+    def get_nearest_lo(lo4, lo1):
+        if lo4 == 0: return lo1
+        if lo1 == 0: return lo4
+        return max(lo4, lo1)
+    def get_nearest_hi(hi4, hi1):
+        if hi4 == 0: return hi1
+        if hi1 == 0: return hi4
+        return min(hi4, hi1)
+
+    nearest_lo = get_nearest_lo(h4_recent_lo, h1_recent_lo)
+    nearest_hi = get_nearest_hi(h4_recent_hi, h1_recent_hi)
     min_space = max(2.0 * av, p * 0.015)
 
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
@@ -428,8 +444,8 @@ def prepare(d,tf,sym):
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
 
-        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: continue
-        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: continue
+        if side=="LONG" and nearest_hi > 0 and (nearest_hi - p) < min_space: continue
+        if side=="SHORT" and nearest_lo > 0 and (p - nearest_lo) < min_space: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -497,9 +513,25 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
-    d4 = candles(sym, "4H", 30)
-    h4_recent_lo = d4.l.iloc[-24:-1].min() if d4 is not None and len(d4)>=25 else 0
-    h4_recent_hi = d4.h.iloc[-24:-1].max() if d4 is not None and len(d4)>=25 else 0
+    d4 = candles(sym, "4H", 50)
+    h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0
+    h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
+
+    d1 = candles(sym, "1H", 30)
+    h1_recent_lo = d1.l.iloc[-24:-1].min() if d1 is not None and len(d1)>=25 else 0
+    h1_recent_hi = d1.h.iloc[-24:-1].max() if d1 is not None and len(d1)>=25 else 0
+
+    def get_nearest_lo(lo4, lo1):
+        if lo4 == 0: return lo1
+        if lo1 == 0: return lo4
+        return max(lo4, lo1)
+    def get_nearest_hi(hi4, hi1):
+        if hi4 == 0: return hi1
+        if hi1 == 0: return hi4
+        return min(hi4, hi1)
+
+    nearest_lo = get_nearest_lo(h4_recent_lo, h1_recent_lo)
+    nearest_hi = get_nearest_hi(h4_recent_hi, h1_recent_hi)
     min_space = max(2.0 * a, p * 0.015)
 
     disc_l = 0.97 if tf=="1D" else 0.985
@@ -513,8 +545,8 @@ def normal(d,tf,sym):
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
-        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: return
-        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: return
+        if side=="LONG" and nearest_hi > 0 and (nearest_hi - p) < min_space: return
+        if side=="SHORT" and nearest_lo > 0 and (p - nearest_lo) < min_space: return
 
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
@@ -566,7 +598,7 @@ def normal(d,tf,sym):
                         tp_use=min(cd,base_tp)
                         if (tp_use-p)/risk>=1.5:
                             add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
-            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5) # 突破保留兜底，下次再改
+            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5) # 突破保留兜底
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -580,7 +612,7 @@ def normal(d,tf,sym):
                         tp_use=max(cd,base_tp)
                         if (p-tp_use)/risk>=1.5:
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
-            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5) # 突破保留兜底，下次再改
+            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5) # 突破保留兜底
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
@@ -691,6 +723,7 @@ def check_live(st):
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
             log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
             
+        # 超时强平逻辑：时间到了，且进度<30%
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100) and mfe_pct < 0.3:
             txt=(f"🚨 警报 ⏰ 超时平仓提醒 {CN[tf]} {s['sym']}\n"
                  f"{DIR[s['dir']]} {TYP[s['type']]}\n"
