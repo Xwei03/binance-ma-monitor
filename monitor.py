@@ -24,7 +24,6 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 1D 超时缩短为 7 天
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":24,"1D":7}
 CHASE_ATR={"1H":2.5,"1D":1.5}
@@ -413,12 +412,13 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    # 只看4H的7天大级别防撞墙，废除1H局部的干扰
+    # 4H大级别前低前高 (7天)
     d4 = candles(sym, "4H", 50)
     h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0 
     h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
 
-    min_space = max(2.0 * av, p * 0.015)
+    # 防接飞刀：入场价距离4H墙不能少于 1.0 ATR 或 1.0%
+    entry_space = max(1.0 * av, p * 0.01)
 
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
@@ -430,8 +430,9 @@ def prepare(d,tf,sym):
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
 
-        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: continue
-        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: continue
+        # 第1关：入场价防撞
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < entry_space: continue
+        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < entry_space: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -461,6 +462,8 @@ def prepare(d,tf,sym):
         need=73 if tf=="1H" else 72
         need_rr=1.5 if tf=="1H" else 2.0
 
+        tp_space = max(0.5 * av, p * 0.005) # 第2关：止盈距离墙至少 0.5 ATR
+
         if side=="LONG":
             sl=calc_sl_struct(d,tf,p,"LONG",av);risk=p-sl
             if risk<=0:continue
@@ -470,6 +473,7 @@ def prepare(d,tf,sym):
                 if cd>p and (cd-p)/risk>=need_rr:
                     tp=cd;break
             if tp is None: continue # 废除假想 TP
+            if h4_recent_hi > 0 and (h4_recent_hi - tp) < tp_space: continue # 止盈防撞
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -480,6 +484,7 @@ def prepare(d,tf,sym):
                 if cd<p and (p-cd)/risk>=need_rr:
                     tp=cd;break
             if tp is None: continue # 废除假想 TP
+            if h4_recent_lo > 0 and (tp - h4_recent_lo) < tp_space: continue # 止盈防撞
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -502,7 +507,9 @@ def normal(d,tf,sym):
     d4 = candles(sym, "4H", 50)
     h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0
     h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
-    min_space = max(2.0 * a, p * 0.015)
+    
+    entry_space = max(1.0 * a, p * 0.01)
+    tp_space = max(0.5 * a, p * 0.005)
 
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
@@ -515,8 +522,13 @@ def normal(d,tf,sym):
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
-        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: return
-        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: return
+        # 第1关：入场价防撞
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < entry_space: return
+        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < entry_space: return
+        
+        # 第2关：止盈防撞
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - tp) < tp_space: return
+        if side=="SHORT" and h4_recent_lo > 0 and (tp - h4_recent_lo) < tp_space: return
 
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
