@@ -24,8 +24,9 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
+# 1D 超时缩短为 7 天
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
-MAX_HOLD={"1H":100,"1D":30}
+MAX_HOLD={"1H":24,"1D":7}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR={"1H":1.5,"1D":2.5}
 GAP_CAP={"1H":0.02,"1D":0.10}
@@ -296,11 +297,11 @@ def daily_report(st):
         lpa=sum(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         
-        t = w + l + to
+        t = w + l
         tw+=w; tl+=l; tbe+=be; te+=e; tto+=to
-        L.append(f"警报 {lb}：止盈{w} 保本{be} 止损{l} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 保本{be} 止损{l} 超时{to}(不计胜率) 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
         
-    tt = tw + tl + tto
+    tt = tw + tl
     allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
     alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
     alltm=[r["mfe"] for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
@@ -309,7 +310,7 @@ def daily_report(st):
     la=sum(alllm)/len(alllm) if alllm else 0
     lpa=sum(alllmp)/len(alllmp) if alllmp else 0
     ta=sum(alltm)/len(alltm) if alltm else 0
-    L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+    L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto}(不计胜率) 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
     wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
@@ -329,6 +330,16 @@ def daily_report(st):
             sym_s=r["sym"].replace("-USDT-SWAP","")
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
+
+    tos=[r for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
+    tos.sort(key=lambda x:-(x.get("mfe_pct",0)))
+    if tos:
+        L.append(f"\n⏰ 超时明细（{len(tos)}条，按止盈进度降序）：")
+        for r in tos:
+            sym_s=r["sym"].replace("-USDT-SWAP","")
+            t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
+            to_str=datetime.fromtimestamp(r["rec_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M") if r.get("rec_ts") else ""
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} 超时{to_str}")
 
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-(x.get("mfe_pct",0)))
@@ -402,6 +413,11 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
+    d4 = candles(sym, "4H", 30)
+    h4_recent_lo = d4.l.iloc[-24:-1].min() if d4 is not None and len(d4)>=25 else 0
+    h4_recent_hi = d4.h.iloc[-24:-1].max() if d4 is not None and len(d4)>=25 else 0
+    min_space = max(2.0 * av, p * 0.015)
+
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
@@ -411,6 +427,9 @@ def prepare(d,tf,sym):
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
+
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: continue
+        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -478,6 +497,11 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
+    d4 = candles(sym, "4H", 30)
+    h4_recent_lo = d4.l.iloc[-24:-1].min() if d4 is not None and len(d4)>=25 else 0
+    h4_recent_hi = d4.h.iloc[-24:-1].max() if d4 is not None and len(d4)>=25 else 0
+    min_space = max(2.0 * a, p * 0.015)
+
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
     gap_max = min(GAP_ATR.get(tf, 2.5) * a / p, GAP_CAP.get(tf,0.04))
@@ -488,6 +512,10 @@ def normal(d,tf,sym):
         if side=="SHORT" and p>=d.o.iloc[-1]:return
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
+        
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: return
+        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: return
+
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
@@ -592,7 +620,9 @@ def check_live(st):
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
         
-        be_price = ent * 1.05 if side=="LONG" else ent * 0.95 if ent else 0
+        tpd_global = tp_v - ent if side=="LONG" else ent - tp_v
+        be_price = max(ent * 1.001, ent + tpd_global * 0.05) if side=="LONG" else min(ent * 0.999, ent - tpd_global * 0.05) if ent else 0
+        
         is_be_notified = s.get("be_sent", False)
         
         res_status = None
@@ -638,7 +668,7 @@ def check_live(st):
             txt=(f"🚨 警报 🛡️ 移动锁盈提醒 {CN[tf]} {s['sym']}\n"
                  f"{DIR[s['dir']]} {TYP[s['type']]}\n"
                  f"当前浮盈已达 60%！请立刻去交易所手动将止损修改为：\n"
-                 f"锁盈价：{be_price:.8g} (锁定 5% 利润)")
+                 f"锁盈价：{be_price:.8g} (锁定 5% 总利润空间)")
             if post(txt):
                 s["be_sent"]=True 
                 log("BREAKEVEN_SENT", s["sym"], s["dir"], f"BE={be_price}")
@@ -661,8 +691,16 @@ def check_live(st):
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
             log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
             
-        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
-            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
+        # 超时强平：时间到了，且进度<30%
+        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100) and mfe_pct < 0.3:
+            txt=(f"🚨 警报 ⏰ 超时平仓提醒 {CN[tf]} {s['sym']}\n"
+                 f"{DIR[s['dir']]} {TYP[s['type']]}\n"
+                 f"当前持仓已超 {MAX_HOLD.get(tf,100)} 根K线，且最高进度仅 {mfe_pct*100:.0f}%。\n"
+                 f"请立刻去交易所手动平仓，撤回资金！")
+            if post(txt):
+                log("TIMEOUT_SENT", s["sym"], s["dir"])
+            rec(st,s,"TIMEOUT",mfe,mfe_pct);continue
+            
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
