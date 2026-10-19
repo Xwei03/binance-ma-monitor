@@ -24,13 +24,13 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 1D 超时缩短为 7 天
+# 1H 的 ATR 倍数放宽到 2.0，1D 保持 2.5 不变
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":24,"1D":7}
 CHASE_ATR={"1H":2.5,"1D":1.5}
-GAP_ATR={"1H":1.5,"1D":2.5}
+GAP_ATR={"1H":2.0,"1D":2.5}
 GAP_CAP={"1H":0.02,"1D":0.10}
-PREPARE_GAP_ATR=1.5
+PREPARE_GAP_ATR=2.0 # 埋伏单的 ATR 倍数也放宽到 2.0
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
@@ -413,7 +413,6 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    # 获取4H大级别前低和前高 (找山峰山谷结构)
     d4 = candles(sym, "4H", 50)
     nearest_hi = 0
     nearest_lo = 0
@@ -471,7 +470,7 @@ def prepare(d,tf,sym):
                 if cd>p and (cd-p)/risk>=need_rr:
                     tp=cd;break
             if tp is None: continue
-            if nearest_hi > 0 and tp >= nearest_hi: continue # 防撞墙
+            if nearest_hi > 0 and tp >= nearest_hi: continue 
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -482,7 +481,7 @@ def prepare(d,tf,sym):
                 if cd<p and (p-cd)/risk>=need_rr:
                     tp=cd;break
             if tp is None: continue
-            if nearest_lo > 0 and tp <= nearest_lo: continue # 防撞墙
+            if nearest_lo > 0 and tp <= nearest_lo: continue 
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -545,7 +544,7 @@ def normal(d,tf,sym):
                     if price<=p:continue
                     tp_c=min(price*disc_l, p+5*a)
                     if (tp_c-p)/risk>=tr_rr:
-                        if nearest_hi > 0 and tp_c >= nearest_hi: break # 防撞墙
+                        if nearest_hi > 0 and tp_c >= nearest_hi: break 
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
@@ -556,7 +555,7 @@ def normal(d,tf,sym):
                     if price>=p:continue
                     tp_c=max(price*disc_s, p-5*a)
                     if (p-tp_c)/risk>=tr_rr:
-                        if nearest_lo > 0 and tp_c <= nearest_lo: break # 防撞墙
+                        if nearest_lo > 0 and tp_c <= nearest_lo: break 
                         add("SHORT","TREND",sl_c,tp_c,tr_rr);break
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
@@ -572,7 +571,7 @@ def normal(d,tf,sym):
                     if cd>p:
                         tp_use=min(cd,base_tp)
                         if (tp_use-p)/risk>=1.5:
-                            if nearest_hi > 0 and tp_use >= nearest_hi: break # 防撞墙
+                            if nearest_hi > 0 and tp_use >= nearest_hi: break 
                             add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
             else: 
                 tp_use = base_tp
@@ -590,7 +589,7 @@ def normal(d,tf,sym):
                     if cd<p:
                         tp_use=max(cd,base_tp)
                         if (p-tp_use)/risk>=1.5:
-                            if nearest_lo > 0 and tp_use <= nearest_lo: break # 防撞墙
+                            if nearest_lo > 0 and tp_use <= nearest_lo: break 
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
             else: 
                 tp_use = base_tp
@@ -706,7 +705,6 @@ def check_live(st):
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
             log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
             
-        # 超时强平逻辑：时间到了，且进度<30%
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100) and mfe_pct < 0.3:
             txt=(f"🚨 警报 ⏰ 超时平仓提醒 {CN[tf]} {s['sym']}\n"
                  f"{DIR[s['dir']]} {TYP[s['type']]}\n"
@@ -740,6 +738,15 @@ def scan():
                 s=signal(dd,tf,sym)
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
+                
+                # 【核心防重发】只要在追列表里有这个币，绝对不发
+                in_live = False
+                for lv_item in st.get("live", []):
+                    if lv_item.get("sym") == s["sym"] and lv_item.get("tf") == tf:
+                        in_live = True
+                        break
+                if in_live: continue
+
                 key=sdk(s["sym"],tf,s["dir"],s["type"])
                 if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
                 s["sent_ts"]=int(dd.ts.iloc[-1])
