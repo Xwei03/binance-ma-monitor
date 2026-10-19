@@ -324,6 +324,7 @@ def daily_report(st):
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
 
+    # 新增：保本明细
     bes=[r for r in rs if r["result"]=="BE" and "mfe" in r]
     bes.sort(key=lambda x:-x.get("score",0))
     if bes:
@@ -606,7 +607,8 @@ def check_live(st):
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
         
-        be_price = ent * 1.001 if side=="LONG" else ent * 0.999 if ent else 0
+        # 5% 锁盈价
+        be_price = ent * 1.05 if side=="LONG" else ent * 0.95 if ent else 0
         is_be_notified = s.get("be_sent", False)
         
         res_status = None
@@ -649,10 +651,10 @@ def check_live(st):
                     break
                 
         if res_status is None and is_be_notified and not s.get("be_sent"):
-            txt=(f"🚨 警报 🛡️ 移动保本提醒 {CN[tf]} {s['sym']}\n"
+            txt=(f"🚨 警报 🛡️ 移动锁盈提醒 {CN[tf]} {s['sym']}\n"
                  f"{DIR[s['dir']]} {TYP[s['type']]}\n"
                  f"当前浮盈已达 60%！请立刻去交易所手动将止损修改为：\n"
-                 f"保本价：{be_price:.8g} (已包含手续费)")
+                 f"锁盈价：{be_price:.8g} (锁定 5% 利润)")
             if post(txt):
                 s["be_sent"]=True 
                 log("BREAKEVEN_SENT", s["sym"], s["dir"], f"BE={be_price}")
