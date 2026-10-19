@@ -413,10 +413,16 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    # 获取4H大级别前低和前高 (过去42根4H，7天)
+    # 获取4H大级别前低和前高 (找山峰山谷结构)
     d4 = candles(sym, "4H", 50)
-    h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0
-    h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
+    nearest_hi = 0
+    nearest_lo = 0
+    if d4 is not None and len(d4) >= 20:
+        d4_sub = d4.iloc[-43:-1] if len(d4)>=43 else d4.iloc[:-1]
+        res_hi = find_swing_levels(d4_sub, "4H", p, "res")
+        res_lo = find_swing_levels(d4_sub, "4H", p, "sup")
+        if res_hi: nearest_hi = res_hi[0][0]
+        if res_lo: nearest_lo = res_lo[0][0]
 
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
@@ -465,8 +471,7 @@ def prepare(d,tf,sym):
                 if cd>p and (cd-p)/risk>=need_rr:
                     tp=cd;break
             if tp is None: continue
-            # 防撞墙死刑：止盈越过了4H前高
-            if h4_recent_hi > 0 and tp >= h4_recent_hi: continue
+            if nearest_hi > 0 and tp >= nearest_hi: continue # 防撞墙
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -477,8 +482,7 @@ def prepare(d,tf,sym):
                 if cd<p and (p-cd)/risk>=need_rr:
                     tp=cd;break
             if tp is None: continue
-            # 防撞墙死刑：止盈越过了4H前低
-            if h4_recent_lo > 0 and tp <= h4_recent_lo: continue
+            if nearest_lo > 0 and tp <= nearest_lo: continue # 防撞墙
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -499,8 +503,14 @@ def normal(d,tf,sym):
     out=[]
 
     d4 = candles(sym, "4H", 50)
-    h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0
-    h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
+    nearest_hi = 0
+    nearest_lo = 0
+    if d4 is not None and len(d4) >= 20:
+        d4_sub = d4.iloc[-43:-1] if len(d4)>=43 else d4.iloc[:-1]
+        res_hi = find_swing_levels(d4_sub, "4H", p, "res")
+        res_lo = find_swing_levels(d4_sub, "4H", p, "sup")
+        if res_hi: nearest_hi = res_hi[0][0]
+        if res_lo: nearest_lo = res_lo[0][0]
 
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
@@ -535,8 +545,7 @@ def normal(d,tf,sym):
                     if price<=p:continue
                     tp_c=min(price*disc_l, p+5*a)
                     if (tp_c-p)/risk>=tr_rr:
-                        # 防撞墙死刑
-                        if h4_recent_hi > 0 and tp_c >= h4_recent_hi: break
+                        if nearest_hi > 0 and tp_c >= nearest_hi: break # 防撞墙
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
@@ -547,8 +556,7 @@ def normal(d,tf,sym):
                     if price>=p:continue
                     tp_c=max(price*disc_s, p-5*a)
                     if (p-tp_c)/risk>=tr_rr:
-                        # 防撞墙死刑
-                        if h4_recent_lo > 0 and tp_c <= h4_recent_lo: break
+                        if nearest_lo > 0 and tp_c <= nearest_lo: break # 防撞墙
                         add("SHORT","TREND",sl_c,tp_c,tr_rr);break
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
@@ -564,12 +572,11 @@ def normal(d,tf,sym):
                     if cd>p:
                         tp_use=min(cd,base_tp)
                         if (tp_use-p)/risk>=1.5:
-                            # 防撞墙死刑
-                            if h4_recent_hi > 0 and tp_use >= h4_recent_hi: break
+                            if nearest_hi > 0 and tp_use >= nearest_hi: break # 防撞墙
                             add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
             else: 
                 tp_use = base_tp
-                if h4_recent_hi > 0 and tp_use >= h4_recent_hi: pass # 兜底也死刑
+                if nearest_hi > 0 and tp_use >= nearest_hi: pass 
                 else: add("LONG","BREAKOUT",sl_c,tp_use,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
@@ -583,12 +590,11 @@ def normal(d,tf,sym):
                     if cd<p:
                         tp_use=max(cd,base_tp)
                         if (p-tp_use)/risk>=1.5:
-                            # 防撞墙死刑
-                            if h4_recent_lo > 0 and tp_use <= h4_recent_lo: break
+                            if nearest_lo > 0 and tp_use <= nearest_lo: break # 防撞墙
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
             else: 
                 tp_use = base_tp
-                if h4_recent_lo > 0 and tp_use <= h4_recent_lo: pass # 兜底也死刑
+                if nearest_lo > 0 and tp_use <= nearest_lo: pass 
                 else: add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
