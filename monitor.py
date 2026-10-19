@@ -97,13 +97,13 @@ def candles(sym,bar,n=300):
     x=get("/api/v5/market/candles",{"instId":sym,"bar":bar,"limit":str(n)})
     if not x:return
     try:
-        d=pd.DataFrame([[int(a[0]),float(a[1001]),float(a[2]),float(a[30]),float(a[4]),float(a[5
-]),a[8]] for a in reversed(x)],
+        d=pd.DataFrame([[int(a[0]),float(a[1]),float(a[2]),float(a[3]),float(a[4]),float(a[5]),a[8]] for a in reversed(x)],
                        columns=["ts","o","h","l","c","v","ok"])
-        d=d        elif[d.ok bar=="1"].reset_index(drop=True)
+        d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
         bar_ms=3600*1000
-        if bar=="1D":bar_ms=86400*=="15m":bar_ms=15*60*1000
+        if bar=="1D":bar_ms=86400*1000
+        elif bar=="15m":bar_ms=15*60*1000
         elif bar=="5m":bar_ms=5*60*1000
         elif bar=="1m":bar_ms=1*60*1000
         if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
@@ -569,60 +569,82 @@ def check_live(st):
         
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
-        be_sent=s.get("be_sent",False)
         
         # 计入手续费补偿的保本价 (多单加0.1%，空单减0.1%)
         be_price = ent * 1.001 if side=="LONG" else ent * 0.999 if ent else 0
         
-        # 1. 先看现在有没有触发保本条件（整体最高进度是否达到 60%）
+        # 铁血判定：完全不看历史假想，只看是否真实发过通知
+        is_be_notified = s.get("be_sent", False)
+        res_status = None
+        
+        # 遍历历史K线
+        for _, r in f.iterrows():
+            if not is_be_notified:
+                # 规则1：还没发通知前，如果碰到了原止损，直接认亏 LOSS（哪怕这根K线前面最高曾到过 99%）
+                hs = (r.l <= sl) if side == "LONG" else (r.h >= sl)
+                ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
+                
+                if hs and ht:
+                    r_res = resolve(s["sym"], side, sl, tp, int(r.ts)-3600*1000, int(r.ts), tf)
+                    if r_res == "LOSS":
+                        res_status = "LOSS"
+                        break
+                    else:
+                        res_status = "WIN"
+                        break
+                elif hs:
+                    res_status = "LOSS"
+                    break
+                elif ht:
+                    res_status = "WIN"
+                    break
+                    
+                # 规则2：如果没死，且当前这根K线的最高进度达到了60%，触发保本通知（在循环外执行通知动作）
+                if ent and tp_v:
+                    tpd = tp_v - ent if side == "LONG" else ent - tp_v
+                    mfp = r.h - ent if side == "LONG" else ent - r.l
+                    bar_pct = mfp / tpd if tpd > 0 else 0
+                    if bar_pct >= 0.6:
+                        is_be_notified = True # 标记，为后续检查做准备
+            else:
+                # 规则3：发过保本通知后，只看是否碰到止盈，或保本价
+                ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
+                hbe = (r.l <= be_price) if side == "LONG" else (r.h >= be_price)
+                if ht:
+                    res_status = "WIN"
+                    break
+                elif hbe:
+                    res_status = "WIN" # 保本出局
+                    break
+                # 碰了原止损？不管，既然发了保本通知，系统判定为 WIN
+                
+        # 检查是否需要发通知（单子还没死，且达到了 60% 条件）
+        if res_status is None and is_be_notified and not s.get("be_sent"):
+            txt=(f"🚨 警报 🛡️ 移动保本提醒 {CN[tf]} {s['sym']}\n"
+                 f"{DIR[s['dir']]} {TYP[s['type']]}\n"
+                 f"当前浮盈已达 60%！请立刻去交易所手动将止损修改为：\n"
+                 f"保本价：{be_price:.8g} (已包含手续费)")
+            if post(txt):
+                s["be_sent"]=True # 标记已发过
+                log("BREAKEVEN_SENT", s["sym"], s["dir"], f"BE={be_price}")
+        
         hi=f.h.max();lo=f.l.min()
+        mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if ent and tp_v:
             tpd=tp_v-ent if side=="LONG" else ent-tp_v
             mfp=hi-ent if side=="LONG" else ent-lo
-            current_mfe_pct=mfp/tpd if tpd>0 else 0
-        else:current_mfe_pct=0
-        
-        if current_mfe_pct >= 0.6 and not be_sent:
-            txt=(f"🚨 警报 🛡️ 移动保本提醒 {CN[tf]} {s['sym']}\n"
-                 f"{DIR[s['dir']]} {TYP[s['type']]}\n"
-                 f"当前浮盈已达标！请立刻去交易所手动将止损修改为：\n"
-                 f"保本价：{be_price:.8g} (已包含手续费)")
-            if post(txt):
-                be_sent=True
-                s["be_sent"]=True
-                log("BREAKEVEN_SENT", s["sym"], s["dir"], f"BE={be_price}")
-                
-        # 2. 再判断最终结果 (按时间顺序排查历史K线)
-        res_status = None
-        for _, r in f.iterrows():
-            # 如果触发过保本，就按保本价算平局
-            if be_sent:
-                ht_be = (r.l <= be_price) if side=="LONG" else (r.h >= be_price)
-                if ht_be:
-                    res_status = "WIN" 
-                    break
-            # 否则按原始止损算亏钱
-            else:
-                hs = (r.l <= sl) if side == "LONG" else (r.h >= sl)
-                ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
-                if hs and ht:
-                    r_res = resolve(s["sym"], side, sl, tp, int(r.ts)-3600*1000, int(r.ts), tf)
-                    res_status = "LOSS" if r_res == "LOSS" else "WIN"
-                    break
-                elif ht: res_status = "WIN"; break
-                elif hs: res_status = "LOSS"; break
-        
-        mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+            mfe_pct=mfp/tpd if tpd>0 else 0
+        else:mfe_pct=0
             
         if res_status == "LOSS":
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,current_mfe_pct)
-            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(current_mfe_pct,1)*100:.0f}%");continue
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,mfe_pct)
+            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         if res_status == "WIN":
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,current_mfe_pct)
-            log("TP/保本",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(current_mfe_pct,1)*100:.0f}%");continue
+            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
+            log("TP/保本",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
             
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
-            rec(st,s,"TIMEOUT",mfe,current_mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(current_mfe_pct,1)*100:.0f}%");continue
+            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
