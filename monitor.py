@@ -462,13 +462,11 @@ def prepare(d,tf,sym):
             cands=find_swing_levels(d,tf,p,"res");tp=None
             for price,_ in cands:
                 cd=price*disc_l
-                if cd>p:
-                    # 截断逻辑：不能越过4H前高
-                    if h4_recent_hi > 0 and cd > h4_recent_hi:
-                        cd = h4_recent_hi * 0.998
-                    if (cd-p)/risk >= need_rr:
-                        tp=cd;break
+                if cd>p and (cd-p)/risk>=need_rr:
+                    tp=cd;break
             if tp is None: continue
+            # 防撞墙死刑：止盈越过了4H前高
+            if h4_recent_hi > 0 and tp >= h4_recent_hi: continue
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -476,13 +474,11 @@ def prepare(d,tf,sym):
             cands=find_swing_levels(d,tf,p,"sup");tp=None
             for price,_ in cands:
                 cd=price*disc_s
-                if cd<p:
-                    # 截断逻辑：不能越过4H前低
-                    if h4_recent_lo > 0 and cd < h4_recent_lo:
-                        cd = h4_recent_lo * 1.002
-                    if (p-cd)/risk >= need_rr:
-                        tp=cd;break
+                if cd<p and (p-cd)/risk>=need_rr:
+                    tp=cd;break
             if tp is None: continue
+            # 防撞墙死刑：止盈越过了4H前低
+            if h4_recent_lo > 0 and tp <= h4_recent_lo: continue
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -538,10 +534,9 @@ def normal(d,tf,sym):
                 for price,_ in cands:
                     if price<=p:continue
                     tp_c=min(price*disc_l, p+5*a)
-                    # 截断
-                    if h4_recent_hi > 0 and tp_c > h4_recent_hi:
-                        tp_c = h4_recent_hi * 0.998
                     if (tp_c-p)/risk>=tr_rr:
+                        # 防撞墙死刑
+                        if h4_recent_hi > 0 and tp_c >= h4_recent_hi: break
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
@@ -551,10 +546,9 @@ def normal(d,tf,sym):
                 for price,_ in cands:
                     if price>=p:continue
                     tp_c=max(price*disc_s, p-5*a)
-                    # 截断
-                    if h4_recent_lo > 0 and tp_c < h4_recent_lo:
-                        tp_c = h4_recent_lo * 1.002
                     if (p-tp_c)/risk>=tr_rr:
+                        # 防撞墙死刑
+                        if h4_recent_lo > 0 and tp_c <= h4_recent_lo: break
                         add("SHORT","TREND",sl_c,tp_c,tr_rr);break
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
@@ -569,17 +563,14 @@ def normal(d,tf,sym):
                     cd=price*disc_l
                     if cd>p:
                         tp_use=min(cd,base_tp)
-                        # 截断
-                        if h4_recent_hi > 0 and tp_use > h4_recent_hi:
-                            tp_use = h4_recent_hi * 0.998
                         if (tp_use-p)/risk>=1.5:
+                            # 防撞墙死刑
+                            if h4_recent_hi > 0 and tp_use >= h4_recent_hi: break
                             add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
-            else:
+            else: 
                 tp_use = base_tp
-                if h4_recent_hi > 0 and tp_use > h4_recent_hi:
-                    tp_use = h4_recent_hi * 0.998
-                if (tp_use-p)/risk>=1.5:
-                    add("LONG","BREAKOUT",sl_c,tp_use,1.5)
+                if h4_recent_hi > 0 and tp_use >= h4_recent_hi: pass # 兜底也死刑
+                else: add("LONG","BREAKOUT",sl_c,tp_use,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -591,17 +582,14 @@ def normal(d,tf,sym):
                     cd=price*disc_s
                     if cd<p:
                         tp_use=max(cd,base_tp)
-                        # 截断
-                        if h4_recent_lo > 0 and tp_use < h4_recent_lo:
-                            tp_use = h4_recent_lo * 1.002
                         if (p-tp_use)/risk>=1.5:
+                            # 防撞墙死刑
+                            if h4_recent_lo > 0 and tp_use <= h4_recent_lo: break
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
-            else:
+            else: 
                 tp_use = base_tp
-                if h4_recent_lo > 0 and tp_use < h4_recent_lo:
-                    tp_use = h4_recent_lo * 1.002
-                if (p-tp_use)/risk>=1.5:
-                    add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
+                if h4_recent_lo > 0 and tp_use <= h4_recent_lo: pass # 兜底也死刑
+                else: add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
