@@ -413,25 +413,11 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
+    # 只看4H的7天大级别防撞墙，废除1H局部的干扰
     d4 = candles(sym, "4H", 50)
-    h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0 # 7天
+    h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0 
     h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
 
-    d1 = candles(sym, "1H", 30)
-    h1_recent_lo = d1.l.iloc[-24:-1].min() if d1 is not None and len(d1)>=25 else 0 # 1天局部
-    h1_recent_hi = d1.h.iloc[-24:-1].max() if d1 is not None and len(d1)>=25 else 0
-
-    def get_nearest_lo(lo4, lo1):
-        if lo4 == 0: return lo1
-        if lo1 == 0: return lo4
-        return max(lo4, lo1)
-    def get_nearest_hi(hi4, hi1):
-        if hi4 == 0: return hi1
-        if hi1 == 0: return hi4
-        return min(hi4, hi1)
-
-    nearest_lo = get_nearest_lo(h4_recent_lo, h1_recent_lo)
-    nearest_hi = get_nearest_hi(h4_recent_hi, h1_recent_hi)
     min_space = max(2.0 * av, p * 0.015)
 
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
@@ -444,8 +430,8 @@ def prepare(d,tf,sym):
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
 
-        if side=="LONG" and nearest_hi > 0 and (nearest_hi - p) < min_space: continue
-        if side=="SHORT" and nearest_lo > 0 and (p - nearest_lo) < min_space: continue
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: continue
+        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -516,22 +502,6 @@ def normal(d,tf,sym):
     d4 = candles(sym, "4H", 50)
     h4_recent_lo = d4.l.iloc[-42:-1].min() if d4 is not None and len(d4)>=43 else 0
     h4_recent_hi = d4.h.iloc[-42:-1].max() if d4 is not None and len(d4)>=43 else 0
-
-    d1 = candles(sym, "1H", 30)
-    h1_recent_lo = d1.l.iloc[-24:-1].min() if d1 is not None and len(d1)>=25 else 0
-    h1_recent_hi = d1.h.iloc[-24:-1].max() if d1 is not None and len(d1)>=25 else 0
-
-    def get_nearest_lo(lo4, lo1):
-        if lo4 == 0: return lo1
-        if lo1 == 0: return lo4
-        return max(lo4, lo1)
-    def get_nearest_hi(hi4, hi1):
-        if hi4 == 0: return hi1
-        if hi1 == 0: return hi4
-        return min(hi4, hi1)
-
-    nearest_lo = get_nearest_lo(h4_recent_lo, h1_recent_lo)
-    nearest_hi = get_nearest_hi(h4_recent_hi, h1_recent_hi)
     min_space = max(2.0 * a, p * 0.015)
 
     disc_l = 0.97 if tf=="1D" else 0.985
@@ -545,8 +515,8 @@ def normal(d,tf,sym):
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
-        if side=="LONG" and nearest_hi > 0 and (nearest_hi - p) < min_space: return
-        if side=="SHORT" and nearest_lo > 0 and (p - nearest_lo) < min_space: return
+        if side=="LONG" and h4_recent_hi > 0 and (h4_recent_hi - p) < min_space: return
+        if side=="SHORT" and h4_recent_lo > 0 and (p - h4_recent_lo) < min_space: return
 
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
