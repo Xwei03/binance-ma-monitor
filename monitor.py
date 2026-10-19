@@ -286,7 +286,7 @@ def daily_report(st):
         to=sum(1 for r in sub if r["result"]=="TIMEOUT")
         p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
         
-        wm=[r["mfe"] for r in sub if r["result"] in ("WIN","BE") and "mfe" in r]
+        wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
         lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
         tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
         lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
@@ -296,14 +296,14 @@ def daily_report(st):
         lpa=sum(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         
-        # 【铁血胜率】：分母只算真实分出胜负的（WIN + LOSS），保本、超时、在追绝对不算
-        t=w+l
+        # 胜率 = 止盈 / (止盈 + 止损 + 超时)
+        t = w + l + to
         tw+=w; tl+=l; tbe+=be; te+=e; tto+=to
         
-        L.append(f"警报 {lb}：止盈{w} 止损{l} 保本{be} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 保本{be} 止损{l} 超时{to} 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
         
-    tt=tw+tl
-    allwm=[r["mfe"] for r in rs if r["result"] in ("WIN","BE") and "mfe" in r]
+    tt = tw + tl + tto
+    allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
     alllm=[r["mfe"] for r in rs if r["result"]=="LOSS" and "mfe" in r]
     alltm=[r["mfe"] for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
     alllmp=[r["mfe_pct"] for r in rs if r["result"]=="LOSS" and "mfe_pct" in r]
@@ -311,19 +311,27 @@ def daily_report(st):
     la=sum(alllm)/len(alllm) if alllm else 0
     lpa=sum(alllmp)/len(alllmp) if alllmp else 0
     ta=sum(alltm)/len(alltm) if alltm else 0
-    
-    L.append(f"警报 合计：止盈{tw} 止损{tl} 保本{tbe} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+    L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto} 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    wins=[r for r in rs if r["result"] in ("WIN","BE") and "mfe" in r]
+    # 把止盈和保本分开列
+    wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
     wins.sort(key=lambda x:-x.get("score",0))
     if wins:
-        L.append(f"\n🏆 止盈/保本明细（{len(wins)}条，按分数降序）：")
+        L.append(f"\n🏆 止盈明细（{len(wins)}条，按分数降序）：")
         for r in wins:
             sym_s=r["sym"].replace("-USDT-SWAP","")
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
-            res_tag = "止盈" if r["result"]=="WIN" else "保本"
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} [{res_tag}] 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
+
+    bes=[r for r in rs if r["result"]=="BE" and "mfe" in r]
+    bes.sort(key=lambda x:-x.get("score",0))
+    if bes:
+        L.append(f"\n🛡️ 保本明细（{len(bes)}条，按分数降序）：")
+        for r in bes:
+            sym_s=r["sym"].replace("-USDT-SWAP","")
+            t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
+            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
 
     losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
     losses.sort(key=lambda x:-(x.get("mfe_pct",0)))
@@ -413,15 +421,15 @@ def prepare(d,tf,sym):
         if side=="LONG" and (recent_hi - p) < 1.0 * av: continue
 
         if side=="LONG":
-            d_e20=(p-e20]:.iloc[-1])/p
-            if d_e20<0continue or d
-_e20>gap_max:continue
-        else       :
-            d_e20=(e if20.iloc[- side1]-p)/p
+            d_e20=(p-e20.iloc[-1])/p
+            if d_e20<0 or d_e20>gap_max:continue
+        else:
+            d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
         if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
-        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
+        if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
+        if side=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
         if side=="SHORT" and (e60.iloc[-1] - p) < 0.5*av:continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
