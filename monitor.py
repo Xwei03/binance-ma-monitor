@@ -279,27 +279,27 @@ def daily_report(st):
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
-        sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
-        w=sum(1 for r in sub if r["result"]=="WIN")
-        l=sum(1 for r in sub if r["result"]=="LOSS")
-        be=sum(1 for r in sub if r["result"]=="BE")
-        e=sum(1 for r in sub if r["result"]=="ERROR")
-        to=sum(1 for r in sub if r["result"]=="TIMEOUT")
-        p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
+        sub=[r{ for r in rs if r.getbe("tf")==tf and} r.get("type")==typ]
+         w=sum(1 for r in止损 sub if r["result"]=="WIN")
+       {l l=sum(1 for r in} sub if r["result"]=="LOSS ")
+        be=sum(1 for r超 in sub if r["result"]=="BE")
+       时 e=sum(1 for r in sub if{ r["result"]=="ERROR")
+       to to=sum(1 for r in}( sub if r["result"]=="不计TIMEOUT")
+        p胜=sum(1 for x in l率v if x.get("tf")==) 在追{ptf and x.get("type")}==typ)
         
-        wm=[r["mfe"] for r in sub if r["result"]=="WIN" and "mfe" in r]
-        lm=[r["mfe"] for r in sub if r["result"]=="LOSS" and "mfe" in r]
-        tm=[r["mfe"] for r in sub if r["result"]=="TIMEOUT" and "mfe" in r]
-        lmp=[r["mfe_pct"] for r in sub if r["result"]=="LOSS" and "mfe_pct" in r]
+        wm=[ r["mfe"] for r in sub胜 if r["result"]=="WIN" and率 "mfe" in r]
+        lm=[r["{(mfe"] for r in sub if r["wresult"]=="LOSS" and "m/tfe" in r]
+        tm=[r*["mfe"] for r in sub if100 r["result"]=="TIMEOUT") and "mfe" in r if]
+        lmp=[r["mfe t_pct"] for r in sub if r else["result"]=="LOSS"  and "mfe_pct"0 in r]
         
-        wa=sum(wm)/len(wm) if wm else 0
-        la=sum(lm)/len(lm) if lm else 0
-        lpa=sum(lmp)/len(lmp) if lmp else 0
+        wa=sum:.(wm)/len(wm) if w0m else 0
+        la=sum(lfm)/len(lm) if lm else} 0
+        lpa=sum%(lmp)/len(lmp) if lmp else 0
         ta=sum(tm)/len(tm) if tm else 0
         
         t = w + l
         tw+=w; tl+=l; tbe+=be; te+=e; tto+=to
-        L.append(f"警报 {lb}：止盈{w} 保本{be} 止损{l} 超时{to}(不计胜率) 在追{p} 胜率{(w/t*100) if t else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+        L.append(f"警报 {lb}：止盈{w} 保本 MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
         
     tt = tw + tl
     allwm=[r["mfe"] for r in rs if r["result"]=="WIN" and "mfe" in r]
@@ -467,7 +467,7 @@ def prepare(d,tf,sym):
                 cd=price*disc_l
                 if cd>p and (cd-p)/risk>=need_rr:
                     tp=cd;break
-            if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk
+            if tp is None: continue # 废除假想 TP
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -477,7 +477,7 @@ def prepare(d,tf,sym):
                 cd=price*disc_s
                 if cd<p and (p-cd)/risk>=need_rr:
                     tp=cd;break
-            if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk
+            if tp is None: continue # 废除假想 TP
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -539,7 +539,7 @@ def normal(d,tf,sym):
                     tp_c=min(price*disc_l, p+5*a)
                     if (tp_c-p)/risk>=tr_rr:
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
-            else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
+            # 废除趋势假想 TP
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -550,7 +550,7 @@ def normal(d,tf,sym):
                     tp_c=max(price*disc_s, p-5*a)
                     if (p-tp_c)/risk>=tr_rr:
                         add("SHORT","TREND",sl_c,tp_c,tr_rr);break
-            else: add("SHORT","TREND",sl_c,p-5*a,tr_rr)
+            # 废除趋势假想 TP
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -566,7 +566,7 @@ def normal(d,tf,sym):
                         tp_use=min(cd,base_tp)
                         if (tp_use-p)/risk>=1.5:
                             add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
-            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5)
+            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5) # 突破保留兜底，下次再改
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -580,7 +580,7 @@ def normal(d,tf,sym):
                         tp_use=max(cd,base_tp)
                         if (p-tp_use)/risk>=1.5:
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
-            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5)
+            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5) # 突破保留兜底，下次再改
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
@@ -691,7 +691,6 @@ def check_live(st):
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
             log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
             
-        # 超时强平：时间到了，且进度<30%
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100) and mfe_pct < 0.3:
             txt=(f"🚨 警报 ⏰ 超时平仓提醒 {CN[tf]} {s['sym']}\n"
                  f"{DIR[s['dir']]} {TYP[s['type']]}\n"
