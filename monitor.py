@@ -24,11 +24,10 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 趋势：1H 偏离度改回 2.0，封顶 2%。1D 不变。
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":24,"1D":7}
 CHASE_ATR={"1H":2.5,"1D":1.5}
-GAP_ATR={"1H":2.0,"1D":2.5} # <--- 修改点：1H从1.5改回2.0
+GAP_ATR={"1H":2.0,"1D":2.5}
 GAP_CAP={"1H":0.02,"1D":0.10}
 PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
@@ -413,15 +412,18 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    d4 = candles(sym, "4H", 50)
+    d4 = candles(sym, "4H", 300)
     nearest_hi = 0
     nearest_lo = 0
-    if d4 is not None and len(d4) >= 20:
+    d4_e20, d4_e60 = 0, 0
+    if d4 is not None and len(d4) >= 60:
         d4_sub = d4.iloc[-43:-1] if len(d4)>=43 else d4.iloc[:-1]
         res_hi = find_swing_levels(d4_sub, "4H", p, "res")
         res_lo = find_swing_levels(d4_sub, "4H", p, "sup")
         if res_hi: nearest_hi = res_hi[0][0]
         if res_lo: nearest_lo = res_lo[0][0]
+        d4_e20 = ema(d4.c, 20).iloc[-1]
+        d4_e60 = ema(d4.c, 60).iloc[-1]
 
     gap_max = min(PREPARE_GAP_ATR * av / p, PREPARE_GAP_CAP.get(tf,0.02))
     disc_l = 0.97 if tf=="1D" else 0.985
@@ -432,6 +434,11 @@ def prepare(d,tf,sym):
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
+        
+        # 放宽的 4H 方向锁：1H 发单必须顺从 4H EMA20与EMA60的关系
+        if tf == "1H" and d4_e20 > 0:
+            if side == "LONG" and d4_e20 <= d4_e60: continue
+            if side == "SHORT" and d4_e20 >= d4_e60: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -501,15 +508,18 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
-    d4 = candles(sym, "4H", 50)
+    d4 = candles(sym, "4H", 300)
     nearest_hi = 0
     nearest_lo = 0
-    if d4 is not None and len(d4) >= 20:
+    d4_e20, d4_e60 = 0, 0
+    if d4 is not None and len(d4) >= 60:
         d4_sub = d4.iloc[-43:-1] if len(d4)>=43 else d4.iloc[:-1]
         res_hi = find_swing_levels(d4_sub, "4H", p, "res")
         res_lo = find_swing_levels(d4_sub, "4H", p, "sup")
         if res_hi: nearest_hi = res_hi[0][0]
         if res_lo: nearest_lo = res_lo[0][0]
+        d4_e20 = ema(d4.c, 20).iloc[-1]
+        d4_e60 = ema(d4.c, 60).iloc[-1]
 
     disc_l = 0.97 if tf=="1D" else 0.985
     disc_s = 1.03 if tf=="1D" else 1.015
@@ -522,6 +532,11 @@ def normal(d,tf,sym):
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
+        # 放宽的 4H 方向锁
+        if tf == "1H" and d4_e20 > 0:
+            if side == "LONG" and d4_e20 <= d4_e60: return
+            if side == "SHORT" and d4_e20 >= d4_e60: return
+
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
         rr=(tp-p)/(p-sl) if side=="LONG" else (p-tp)/(sl-p)
