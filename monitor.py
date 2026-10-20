@@ -24,11 +24,12 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
+# 1D 超时缩短为 7 天
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":24,"1D":7}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 GAP_ATR={"1H":2.0,"1D":2.5}
-GAP_CAP={"1H":0.02,"1D":0.10}
+GAP_CAP={"1H":0.04,"1D":0.10} # <--- 修改点：1H 趋势封顶改回 4%
 PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
@@ -435,7 +436,7 @@ def prepare(d,tf,sym):
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
         
-        # 放宽的 4H 方向锁：1H 发单必须顺从 4H EMA20与EMA60的关系
+        # 放宽的 4H 方向锁
         if tf == "1H" and d4_e20 > 0:
             if side == "LONG" and d4_e20 <= d4_e60: continue
             if side == "SHORT" and d4_e20 >= d4_e60: continue
