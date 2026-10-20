@@ -24,12 +24,12 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 1D 超时缩短为 7 天
+# 恢复老参数：超时 100/30，趋势偏离 2.5 ATR / 4%
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
-MAX_HOLD={"1H":24,"1D":7}
+MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
-GAP_ATR={"1H":2.0,"1D":2.5}
-GAP_CAP={"1H":0.04,"1D":0.10} # <--- 修改点：1H 趋势封顶改回 4%
+GAP_ATR={"1H":2.5,"1D":2.5}
+GAP_CAP={"1H":0.04,"1D":0.10}
 PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
@@ -413,16 +413,10 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
+    # 获取4H EMA20/60 用于方向锁
     d4 = candles(sym, "4H", 300)
-    nearest_hi = 0
-    nearest_lo = 0
     d4_e20, d4_e60 = 0, 0
     if d4 is not None and len(d4) >= 60:
-        d4_sub = d4.iloc[-43:-1] if len(d4)>=43 else d4.iloc[:-1]
-        res_hi = find_swing_levels(d4_sub, "4H", p, "res")
-        res_lo = find_swing_levels(d4_sub, "4H", p, "sup")
-        if res_hi: nearest_hi = res_hi[0][0]
-        if res_lo: nearest_lo = res_lo[0][0]
         d4_e20 = ema(d4.c, 20).iloc[-1]
         d4_e60 = ema(d4.c, 60).iloc[-1]
 
@@ -436,7 +430,7 @@ def prepare(d,tf,sym):
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
         
-        # 放宽的 4H 方向锁
+        # 1H 发单必须顺从 4H 均线方向（止血包2）
         if tf == "1H" and d4_e20 > 0:
             if side == "LONG" and d4_e20 <= d4_e60: continue
             if side == "SHORT" and d4_e20 >= d4_e60: continue
@@ -477,8 +471,7 @@ def prepare(d,tf,sym):
                 cd=price*disc_l
                 if cd>p and (cd-p)/risk>=need_rr:
                     tp=cd;break
-            if tp is None: continue
-            if nearest_hi > 0 and tp >= nearest_hi: continue 
+            if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk # 恢复假想TP
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -488,8 +481,7 @@ def prepare(d,tf,sym):
                 cd=price*disc_s
                 if cd<p and (p-cd)/risk>=need_rr:
                     tp=cd;break
-            if tp is None: continue
-            if nearest_lo > 0 and tp <= nearest_lo: continue 
+            if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk # 恢复假想TP
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -509,16 +501,10 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
+    # 获取4H EMA20/60
     d4 = candles(sym, "4H", 300)
-    nearest_hi = 0
-    nearest_lo = 0
     d4_e20, d4_e60 = 0, 0
     if d4 is not None and len(d4) >= 60:
-        d4_sub = d4.iloc[-43:-1] if len(d4)>=43 else d4.iloc[:-1]
-        res_hi = find_swing_levels(d4_sub, "4H", p, "res")
-        res_lo = find_swing_levels(d4_sub, "4H", p, "sup")
-        if res_hi: nearest_hi = res_hi[0][0]
-        if res_lo: nearest_lo = res_lo[0][0]
         d4_e20 = ema(d4.c, 20).iloc[-1]
         d4_e60 = ema(d4.c, 60).iloc[-1]
 
@@ -533,7 +519,7 @@ def normal(d,tf,sym):
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
-        # 放宽的 4H 方向锁
+        # 1H 发单必须顺从 4H 均线方向（止血包2）
         if tf == "1H" and d4_e20 > 0:
             if side == "LONG" and d4_e20 <= d4_e60: return
             if side == "SHORT" and d4_e20 >= d4_e60: return
@@ -560,8 +546,8 @@ def normal(d,tf,sym):
                     if price<=p:continue
                     tp_c=min(price*disc_l, p+5*a)
                     if (tp_c-p)/risk>=tr_rr:
-                        if nearest_hi > 0 and tp_c >= nearest_hi: break 
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
+            else: add("LONG","TREND",sl_c,p+5*a,tr_rr) # 恢复假想TP
     if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -571,8 +557,8 @@ def normal(d,tf,sym):
                     if price>=p:continue
                     tp_c=max(price*disc_s, p-5*a)
                     if (p-tp_c)/risk>=tr_rr:
-                        if nearest_lo > 0 and tp_c <= nearest_lo: break 
                         add("SHORT","TREND",sl_c,tp_c,tr_rr);break
+            else: add("SHORT","TREND",sl_c,p-5*a,tr_rr) # 恢复假想TP
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -587,12 +573,8 @@ def normal(d,tf,sym):
                     if cd>p:
                         tp_use=min(cd,base_tp)
                         if (tp_use-p)/risk>=1.5:
-                            if nearest_hi > 0 and tp_use >= nearest_hi: break 
                             add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
-            else: 
-                tp_use = base_tp
-                if nearest_hi > 0 and tp_use >= nearest_hi: pass 
-                else: add("LONG","BREAKOUT",sl_c,tp_use,1.5)
+            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5)
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -605,12 +587,8 @@ def normal(d,tf,sym):
                     if cd<p:
                         tp_use=max(cd,base_tp)
                         if (p-tp_use)/risk>=1.5:
-                            if nearest_lo > 0 and tp_use <= nearest_lo: break 
                             add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
-            else: 
-                tp_use = base_tp
-                if nearest_lo > 0 and tp_use <= nearest_lo: pass 
-                else: add("SHORT","BREAKOUT",sl_c,tp_use,1.5)
+            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5)
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
@@ -650,59 +628,27 @@ def check_live(st):
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
         
-        tpd_global = tp_v - ent if side=="LONG" else ent - tp_v
-        be_price = max(ent * 1.001, ent + tpd_global * 0.05) if side=="LONG" else min(ent * 0.999, ent - tpd_global * 0.05) if ent else 0
-        
-        is_be_notified = s.get("be_sent", False)
-        
         res_status = None
         
         for _, r in f.iterrows():
-            if not is_be_notified:
-                hs = (r.l <= sl) if side == "LONG" else (r.h >= sl)
-                ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
-                
-                if hs and ht:
-                    r_res = resolve(s["sym"], side, sl, tp, int(r.ts)-3600*1000, int(r.ts), tf)
-                    if r_res == "LOSS":
-                        res_status = "LOSS"
-                        break
-                    else:
-                        res_status = "WIN"
-                        break
-                elif hs:
+            hs = (r.l <= sl) if side == "LONG" else (r.h >= sl)
+            ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
+            
+            if hs and ht:
+                r_res = resolve(s["sym"], side, sl, tp, int(r.ts)-3600*1000, int(r.ts), tf)
+                if r_res == "LOSS":
                     res_status = "LOSS"
                     break
-                elif ht:
+                else:
                     res_status = "WIN"
                     break
-                    
-                if ent and tp_v:
-                    tpd = tp_v - ent if side == "LONG" else ent - tp_v
-                    mfp = r.h - ent if side == "LONG" else ent - r.l
-                    bar_pct = mfp / tpd if tpd > 0 else 0
-                    if bar_pct >= 0.6:
-                        is_be_notified = True 
-            else:
-                ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
-                hbe = (r.l <= be_price) if side == "LONG" else (r.h >= be_price)
+            elif hs:
+                res_status = "LOSS"
+                break
+            elif ht:
+                res_status = "WIN"
+                break
                 
-                if ht:
-                    res_status = "WIN"
-                    break
-                elif hbe:
-                    res_status = "BE"
-                    break
-                
-        if res_status is None and is_be_notified and not s.get("be_sent"):
-            txt=(f"🚨 警报 🛡️ 移动锁盈提醒 {CN[tf]} {s['sym']}\n"
-                 f"{DIR[s['dir']]} {TYP[s['type']]}\n"
-                 f"当前浮盈已达 60%！请立刻去交易所手动将止损修改为：\n"
-                 f"锁盈价：{be_price:.8g} (锁定 5% 总利润空间)")
-            if post(txt):
-                s["be_sent"]=True 
-                log("BREAKEVEN_SENT", s["sym"], s["dir"], f"BE={be_price}")
-        
         hi=f.h.max();lo=f.l.min()
         mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
         if ent and tp_v:
@@ -714,22 +660,12 @@ def check_live(st):
         if res_status == "LOSS":
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,mfe_pct)
             log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
-        if res_status == "BE":
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"BE",mfe,mfe_pct)
-            log("BE",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         if res_status == "WIN":
             mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
             log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
             
-        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100) and mfe_pct < 0.3:
-            txt=(f"🚨 警报 ⏰ 超时平仓提醒 {CN[tf]} {s['sym']}\n"
-                 f"{DIR[s['dir']]} {TYP[s['type']]}\n"
-                 f"当前持仓已超 {MAX_HOLD.get(tf,100)} 根K线，且最高进度仅 {mfe_pct*100:.0f}%。\n"
-                 f"请立刻去交易所手动平仓，撤回资金！")
-            if post(txt):
-                log("TIMEOUT_SENT", s["sym"], s["dir"])
-            rec(st,s,"TIMEOUT",mfe,mfe_pct);continue
-            
+        if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
+            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
