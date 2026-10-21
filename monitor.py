@@ -535,8 +535,8 @@ def normal(d,tf,sym):
 
     tr_rr = 1.5
 
-    # 【只改这里】做多趋势：EMA20 > EMA60，且 价格 > EMA20 且 价格 > EMA120
-    if p>e120 and p>e20 and e20>e60 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+    # 【核心修改】做多趋势：价格站上 EMA120，EMA20 > EMA60(含0.1%缓冲)，且价格 > EMA20
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
@@ -548,8 +548,8 @@ def normal(d,tf,sym):
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
             else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
             
-    # 【只改这里】做空趋势：EMA20 < EMA60，且 价格 < EMA20 且 价格 < EMA120
-    if p<e120 and p<e20 and e20<e60 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+    # 【核心修改】做空趋势：价格跌破 EMA120，EMA20 < EMA60(含0.1%缓冲)，且价格 < EMA20
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
@@ -679,13 +679,13 @@ def scan():
     ss=coins()
     if not ss:log("no coins");save_state(st);return
 
-    for tf,(bar,n,_,_) in TF.items][():
+    for tf,(bar,n,_,_) in TF.items():
         if stop:break
-        if notkey tf_run(tf):continue
-        log(f]))"[扫描] {tf}")
+        if not tf_run(tf):continue
+        log(f"[扫描] {tf}")
         hits=[]
-       < for sym in ss:
-            ifCO stop:break
+        for sym in ss:
+            if stop:break
             try:
                 dd=candles(sym,bar,n)
                 s=signal(dd,tf,sym)
@@ -701,7 +701,7 @@ def scan():
                 if in_live: continue
 
                 key=sdk(s["sym"],tf,s["dir"],s["type"])
-                if key in st.get("cool",{}) and bars_since(dd,int(st["cool"OL_BARS:continue
+                if key in st.get("cool",{}) and bars_since(dd,int(st["cool"][key]))<COOL_BARS:continue
                 s["sent_ts"]=int(dd.ts.iloc[-1])
                 hits.append(s)
             except Exception as e:
