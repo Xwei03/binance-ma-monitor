@@ -24,7 +24,7 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 恢复老参数：超时 100/30，趋势偏离 2.5 ATR / 4%
+# 参数保持不变
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
@@ -34,7 +34,8 @@ PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
-MAX_SEND_PER_SCAN,MAX_LIVE=20,200
+MAX_SEND_PER_SCAN=20 
+MAX_LIVE=20
 MIN_VOL=10000000
 CN={"1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
@@ -413,7 +414,6 @@ def prepare(d,tf,sym):
     h4_bias=h4_filter(sym)
     out=[]
 
-    # 获取4H EMA20/60 用于方向锁
     d4 = candles(sym, "4H", 300)
     d4_e20, d4_e60 = 0, 0
     if d4 is not None and len(d4) >= 60:
@@ -430,7 +430,7 @@ def prepare(d,tf,sym):
         if side=="LONG" and h4_bias==-1:continue
         if side=="SHORT" and h4_bias==1:continue
         
-        # 1H 发单必须顺从 4H 均线方向（止血包2）
+        # 止血包2：1H 发单必须顺从 4H 均线方向
         if tf == "1H" and d4_e20 > 0:
             if side == "LONG" and d4_e20 <= d4_e60: continue
             if side == "SHORT" and d4_e20 >= d4_e60: continue
@@ -471,7 +471,7 @@ def prepare(d,tf,sym):
                 cd=price*disc_l
                 if cd>p and (cd-p)/risk>=need_rr:
                     tp=cd;break
-            if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk # 恢复假想TP
+            if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
@@ -481,7 +481,7 @@ def prepare(d,tf,sym):
                 cd=price*disc_s
                 if cd<p and (p-cd)/risk>=need_rr:
                     tp=cd;break
-            if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk # 恢复假想TP
+            if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
@@ -501,7 +501,6 @@ def normal(d,tf,sym):
     bs=btc(TF[tf][0]);h4_bias=h4_filter(sym)
     out=[]
 
-    # 获取4H EMA20/60
     d4 = candles(sym, "4H", 300)
     d4_e20, d4_e60 = 0, 0
     if d4 is not None and len(d4) >= 60:
@@ -519,7 +518,7 @@ def normal(d,tf,sym):
         if side=="LONG" and h4_bias==-1:return
         if side=="SHORT" and h4_bias==1:return
         
-        # 1H 发单必须顺从 4H 均线方向（止血包2）
+        # 止血包2：1H 发单必须顺从 4H 均线方向
         if tf == "1H" and d4_e20 > 0:
             if side == "LONG" and d4_e20 <= d4_e60: return
             if side == "SHORT" and d4_e20 >= d4_e60: return
@@ -537,7 +536,8 @@ def normal(d,tf,sym):
 
     tr_rr = 1.5
 
-    if e20>e60*1.001 and e60>e120*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and p>e20 and (p-e20)/p<gap_max:
+    # 【核心修改】做多：收盘价站上120线，且EMA20 > EMA60
+    if p>e120 and e20>e60 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
@@ -547,8 +547,10 @@ def normal(d,tf,sym):
                     tp_c=min(price*disc_l, p+5*a)
                     if (tp_c-p)/risk>=tr_rr:
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
-            else: add("LONG","TREND",sl_c,p+5*a,tr_rr) # 恢复假想TP
-    if e20<e60*0.999 and e60<e120*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and p<e20 and (e20-p)/p<gap_max:
+            else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
+            
+    # 【核心修改】做空：收盘价跌破120线，且EMA20 < EMA60
+    if p<e120 and e20<e60 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
@@ -558,7 +560,7 @@ def normal(d,tf,sym):
                     tp_c=max(price*disc_s, p-5*a)
                     if (p-tp_c)/risk>=tr_rr:
                         add("SHORT","TREND",sl_c,tp_c,tr_rr);break
-            else: add("SHORT","TREND",sl_c,p-5*a,tr_rr) # 恢复假想TP
+            else: add("SHORT","TREND",sl_c,p-5*a,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
@@ -691,6 +693,7 @@ def scan():
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
                 
+                # 止血包1：in_live 死锁，防止重复发单
                 in_live = False
                 for lv_item in st.get("live", []):
                     if lv_item.get("sym") == s["sym"] and lv_item.get("tf") == tf:
