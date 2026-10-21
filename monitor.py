@@ -24,7 +24,6 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 参数保持不变
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
@@ -536,8 +535,8 @@ def normal(d,tf,sym):
 
     tr_rr = 1.5
 
-    # 【核心修改】做多：收盘价站上120线，且EMA20 > EMA60
-    if p>e120 and e20>e60 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+    # 【核心修改】做多趋势：价格站上 EMA120，EMA20 > EMA60，且价格 > EMA20
+    if p>e120 and e20>e60 and p>e20 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
@@ -549,8 +548,8 @@ def normal(d,tf,sym):
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
             else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
             
-    # 【核心修改】做空：收盘价跌破120线，且EMA20 < EMA60
-    if p<e120 and e20<e60 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+    # 【核心修改】做空趋势：价格跌破 EMA120，EMA20 < EMA60，且价格 < EMA20
+    if p<e120 and e20<e60 and p<e20 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
