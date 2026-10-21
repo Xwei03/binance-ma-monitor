@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D)
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净测试版
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -535,7 +535,7 @@ def normal(d,tf,sym):
 
     tr_rr = 1.5
 
-    # 【核心修改】做多趋势：价格站上 EMA120，EMA20 > EMA60(含0.1%缓冲)，且价格 > EMA20
+    # 做多趋势
     if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
@@ -548,7 +548,7 @@ def normal(d,tf,sym):
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
             else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
             
-    # 【核心修改】做空趋势：价格跌破 EMA120，EMA20 < EMA60(含0.1%缓冲)，且价格 < EMA20
+    # 做空趋势
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -562,34 +562,38 @@ def normal(d,tf,sym):
             else: add("SHORT","TREND",sl_c,p-5*a,tr_rr)
 
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
+    
+    real_body = abs(p - d.o.iloc[-1])
+    real_body_safe = max(real_body, a * 0.01)
+    upper_wick = d.h.iloc[-1] - max(p, d.o.iloc[-1])
+    lower_wick = min(p, d.o.iloc[-1]) - d.l.iloc[-1]
+
+    # 做多突破（加长上影线过滤，放宽量能上限）
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.5<=vr<8.0 and body<0.65 and body_prev<0.65 and upper_wick < real_body_safe * 0.5:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
-            base_tp=p+1.5*risk
             cands=find_swing_levels(d,tf,p,"res")
             if cands:
                 for price,_ in cands:
                     if price<=p:continue
-                    cd=price*disc_l
-                    if cd>p:
-                        tp_use=min(cd,base_tp)
-                        if (tp_use-p)/risk>=1.5:
-                            add("LONG","BREAKOUT",sl_c,tp_use,1.5);break
-            else: add("LONG","BREAKOUT",sl_c,base_tp,1.5)
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.3<=vr<3.5 and body<0.65 and body_prev<0.65:
+                    tp_c=min(price*disc_l, p+5*a)
+                    if (tp_c-p)/risk>=1.5:
+                        add("LONG","BREAKOUT",sl_c,tp_c,1.5);break
+            else: add("LONG","BREAKOUT",sl_c,p+5*a,1.5)
+            
+    # 做空突破（加长下影线过滤，放宽量能上限）
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.5<=vr<8.0 and body<0.65 and body_prev<0.65 and lower_wick < real_body_safe * 0.5:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
-            base_tp=p-1.5*risk
             cands=find_swing_levels(d,tf,p,"sup")
             if cands:
                 for price,_ in cands:
                     if price>=p:continue
-                    cd=price*disc_s
-                    if cd<p:
-                        tp_use=max(cd,base_tp)
-                        if (p-tp_use)/risk>=1.5:
-                            add("SHORT","BREAKOUT",sl_c,tp_use,1.5);break
-            else: add("SHORT","BREAKOUT",sl_c,base_tp,1.5)
+                    tp_c=max(price*disc_s, p-5*a)
+                    if (p-tp_c)/risk>=1.5:
+                        add("SHORT","BREAKOUT",sl_c,tp_c,1.5);break
+            else: add("SHORT","BREAKOUT",sl_c,p-5*a,1.5)
+            
     return max(out,key=lambda x:x["score"]) if out else None
 
 def signal(d,tf,sym):
