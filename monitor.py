@@ -568,31 +568,21 @@ def normal(d,tf,sym):
     upper_wick = d.h.iloc[-1] - max(p, d.o.iloc[-1])
     lower_wick = min(p, d.o.iloc[-1]) - d.l.iloc[-1]
 
-    # 做多突破（加长上影线过滤，放宽量能上限）
-    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.5<=vr<8.0 and body<0.65 and body_prev<0.65 and upper_wick < real_body_safe * 0.5:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
-        if risk>0:
-            cands=find_swing_levels(d,tf,p,"res")
-            if cands:
-                for price,_ in cands:
-                    if price<=p:continue
-                    tp_c=min(price*disc_l, p+5*a)
-                    if (tp_c-p)/risk>=1.5:
-                        add("LONG","BREAKOUT",sl_c,tp_c,1.5);break
-            else: add("LONG","BREAKOUT",sl_c,p+5*a,1.5)
+    # 做多突破（删除实体限制，极窄破位止损，2R止盈）
+    if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.5<=vr<8.0 and upper_wick < real_body_safe * 0.5:
+        sl_c = hi - 0.2 * a
+        risk = p - sl_c
+        if risk > 0:
+            tp_c = p + 2.0 * risk
+            add("LONG","BREAKOUT",sl_c,tp_c,2.0)
             
-    # 做空突破（加长下影线过滤，放宽量能上限）
-    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.5<=vr<8.0 and body<0.65 and body_prev<0.65 and lower_wick < real_body_safe * 0.5:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
-        if risk>0:
-            cands=find_swing_levels(d,tf,p,"sup")
-            if cands:
-                for price,_ in cands:
-                    if price>=p:continue
-                    tp_c=max(price*disc_s, p-5*a)
-                    if (p-tp_c)/risk>=1.5:
-                        add("SHORT","BREAKOUT",sl_c,tp_c,1.5);break
-            else: add("SHORT","BREAKOUT",sl_c,p-5*a,1.5)
+    # 做空突破（删除实体限制，极窄破位止损，2R止盈）
+    if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.5<=vr<8.0 and lower_wick < real_body_safe * 0.5:
+        sl_c = lo + 0.2 * a
+        risk = sl_c - p
+        if risk > 0:
+            tp_c = p - 2.0 * risk
+            add("SHORT","BREAKOUT",sl_c,tp_c,2.0)
             
     return max(out,key=lambda x:x["score"]) if out else None
 
