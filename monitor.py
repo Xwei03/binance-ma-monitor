@@ -36,6 +36,9 @@ KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
 MAX_SEND_PER_SCAN=20 
 MAX_LIVE=20
 MIN_VOL=10000000
+MAX_SHADOW=50
+SHADOW_KEEP_DAYS=3
+SHADOW_COOL_KEEP_DAYS=30
 CN={"1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
@@ -110,7 +113,9 @@ def candles(sym,bar,n=300):
         if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
             d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
-    except:return
+    except Exception as e:
+        log(f"[CANDLES] {sym} {bar} {type(e).__name__} {e}")
+        return
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 
@@ -192,7 +197,7 @@ def btc(bar):
     btc_cache[bar]=v;return v
 
 def h4_filter(sym):
-    d4=candles(sym,"4H",30)
+    d4=candles(sym,"4H",300)
     if d4 is None or len(d4)<15:return 0
     a4=atr(d4).iloc[-1]
     if pd.isna(a4) or a4<=0:return 0
@@ -233,6 +238,28 @@ def rec(st,s,r,mfe=None,mfe_pct=None):
     if mfe_pct is not None:e["mfe_pct"]=round(min(float(mfe_pct),1.0)*100,1)
     st.setdefault("results",[]).append(e)
 
+def rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,score=0):
+    for lv in st.get("live",[]):
+        if lv.get("sym")==sym and lv.get("tf")==tf:return
+    if len(st.get("shadow",[]))>=MAX_SHADOW:
+        log("SHADOW_FULL skip",sym,tf,side,typ)
+        return
+    key=f"{sym}|{tf}|{side}|{','.join(reasons)}"
+    cool=st.setdefault("shadow_cool",{})
+    prev=cool.get(key)
+    if prev and bars_since(d,int(prev))<COOL_BARS:return
+    if abs(p-sl)<1e-12 or abs(p-tp)<1e-12:return
+    st.setdefault("shadow",[]).append({
+        "sym":sym,"tf":tf,"dir":side,"type":typ,
+        "reasons":list(reasons),
+        "entry":float(p),"sl":float(sl),"tp":float(tp),
+        "score":int(score),
+        "ts":int(time.time()),
+        "sent_ts":int(d.ts.iloc[-1]),
+    })
+    cool[key]=int(d.ts.iloc[-1])
+    log("SHADOW_REC",sym,tf,side,typ,"+".join(reasons),score)
+
 def post(txt):
     if not WEBHOOK:return False
     for i in range(3):
@@ -267,14 +294,31 @@ def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
     st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=c}
-    kc=int(time.time())-KEEP_RESULT_DAYS*86400
-    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=kc]
+    sc_keep=(int(time.time())-SHADOW_COOL_KEEP_DAYS*86400)*1000
+    st["shadow_cool"]={k:v for k,v in st.get("shadow_cool",{}).items() if v>=sc_keep}
+    kc_actual=int(time.time())-KEEP_RESULT_DAYS*86400
+    kc_shadow=int(time.time())-SHADOW_KEEP_DAYS*86400
+    new_results=[]
+    for r in st.get("results",[]):
+        if r.get("shadow"):
+            if r["ts"]>=kc_shadow:new_results.append(r)
+        else:
+            if r["ts"]>=kc_actual:new_results.append(r)
+    st["results"]=new_results
+
+def _shadow_line(sub):
+    w=sum(1 for r in sub if r["result"]=="WIN")
+    l=sum(1 for r in sub if r["result"]=="LOSS")
+    to=sum(1 for r in sub if r["result"]=="TIMEOUT")
+    t=w+l
+    return f"止盈{w} 止损{l} 超时{to} 胜率{(w/t*100) if t else 0:.0f}%"
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
     if st.get("last_report")==today or n.hour>=12:return
     cut=int(time.time())-86400
-    rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
+    rs=[r for r in st.get("results",[]) if r["ts"]>=cut and not r.get("shadow")]
+    shadow_rs=[r for r in st.get("results",[]) if r["ts"]>=cut and r.get("shadow")]
     L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=tto=tbe=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
@@ -312,6 +356,28 @@ def daily_report(st):
     ta=sum(alltm)/len(alltm) if alltm else 0
     L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto}(不计胜率) 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if shadow_rs or st.get("shadow"):
+        L.append(f"\n👻 影子单（被 4H 过滤拦掉的候选，仅观测，不计实际胜率）")
+        for tf_x in ("1H","1D"):
+            sub_tf=[r for r in shadow_rs if r.get("tf")==tf_x]
+            if not sub_tf:continue
+            L.append(f"  【{tf_x}】")
+            for typ in ("PREPARE","TREND","BRE [{AKOUT"):
+                sub_typ=[r for r in sub_tf if r.get("type")==typ]
+                if not sub_typ:continue
+                L.append(f"   TYP[typ]}]")
+                groups={}
+                for r in sub_typ:
+                    k="+".join(r.get("reasons") or ["?"])
+                    groups.setdefault(k,[]).append(r)
+                for k in sorted(groups.keys()):
+                    L.append(f"      被拦[{k}]：{_shadow_line(groups[k])}")
+                L.append(f"      小计：{_shadow_line(sub_typ)}")
+        pend=len(st.get("shadow",[]))
+        full_tag="（已满，暂停记录新影子）" if pend>=MAX_SHADOW else ""
+        L.append(f"  影子在跟：{pend}/{MAX_SHADOW} 条{full_tag}")
+        L.append(f"  口径：影子单 sl/tp 按各自类型真实逻辑算，跟到止盈/止损/超时；不代表没过滤就能赚")
 
     wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
     wins.sort(key=lambda x:-x.get("score",0))
@@ -399,7 +465,7 @@ def resolve(sym,side,sl,tp,ts0,ts1,tf):
         r=try_res(sym,b,side,sl,tp,ts0,ts1)
         if r is not None: return r
 
-def prepare(d,tf,sym):
+def prepare(d,tf,sym,st):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
     a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
@@ -426,13 +492,6 @@ def prepare(d,tf,sym):
     for side in ("LONG","SHORT"):
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
-        if side=="LONG" and h4_bias==-1:continue
-        if side=="SHORT" and h4_bias==1:continue
-        
-        # 止血包2：1H 发单必须顺从 4H 均线方向
-        if tf == "1H" and d4_e20 > 0:
-            if side == "LONG" and d4_e20 <= d4_e60: continue
-            if side == "SHORT" and d4_e20 >= d4_e60: continue
 
         if side=="LONG":
             d_e20=(p-e20.iloc[-1])/p
@@ -484,10 +543,21 @@ def prepare(d,tf,sym):
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
+            h4_blocked = (side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
+            ema4h_blocked = False
+            if tf == "1H" and d4_e20 > 0:
+                if side == "LONG" and d4_e20 <= d4_e60: ema4h_blocked = True
+                if side == "SHORT" and d4_e20 >= d4_e60: ema4h_blocked = True
+            if h4_blocked or ema4h_blocked:
+                reasons=[]
+                if h4_blocked: reasons.append("h4_bias")
+                if ema4h_blocked: reasons.append("ema4h")
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,int(s))
+                continue
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
-def normal(d,tf,sym):
+def normal(d,tf,sym,st):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
     e20s=ema(d.c,20);e60s=ema(d.c,60);e120s=ema(d.c,120)
@@ -514,13 +584,6 @@ def normal(d,tf,sym):
     def add(side,typ,sl,tp,need_rr):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
-        if side=="LONG" and h4_bias==-1:return
-        if side=="SHORT" and h4_bias==1:return
-        
-        # 止血包2：1H 发单必须顺从 4H 均线方向
-        if tf == "1H" and d4_e20 > 0:
-            if side == "LONG" and d4_e20 <= d4_e60: return
-            if side == "SHORT" and d4_e20 >= d4_e60: return
 
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
@@ -531,11 +594,21 @@ def normal(d,tf,sym):
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
         if rr>=need_rr and s>=TF[tf][2]:
+            h4_blocked = (side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
+            ema4h_blocked = False
+            if tf == "1H" and d4_e20 > 0:
+                if side == "LONG" and d4_e20 <= d4_e60: ema4h_blocked = True
+                if side == "SHORT" and d4_e20 >= d4_e60: ema4h_blocked = True
+            if h4_blocked or ema4h_blocked:
+                reasons=[]
+                if h4_blocked: reasons.append("h4_bias")
+                if ema4h_blocked: reasons.append("ema4h")
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s))
+                return
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
 
     tr_rr = 1.5
 
-    # 做多趋势
     if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
@@ -548,7 +621,6 @@ def normal(d,tf,sym):
                         add("LONG","TREND",sl_c,tp_c,tr_rr);break
             else: add("LONG","TREND",sl_c,p+5*a,tr_rr)
             
-    # 做空趋势
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
@@ -568,7 +640,6 @@ def normal(d,tf,sym):
     upper_wick = d.h.iloc[-1] - max(p, d.o.iloc[-1])
     lower_wick = min(p, d.o.iloc[-1]) - d.l.iloc[-1]
 
-    # 做多突破（删除实体限制，极窄破位止损，2R止盈）
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.5<=vr<8.0 and upper_wick < real_body_safe * 0.5:
         sl_c = hi - 0.2 * a
         risk = p - sl_c
@@ -576,7 +647,6 @@ def normal(d,tf,sym):
             tp_c = p + 2.0 * risk
             add("LONG","BREAKOUT",sl_c,tp_c,2.0)
             
-    # 做空突破（删除实体限制，极窄破位止损，2R止盈）
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.5<=vr<8.0 and lower_wick < real_body_safe * 0.5:
         sl_c = lo + 0.2 * a
         risk = sl_c - p
@@ -586,8 +656,8 @@ def normal(d,tf,sym):
             
     return max(out,key=lambda x:x["score"]) if out else None
 
-def signal(d,tf,sym):
-    p=prepare(d,tf,sym);n=normal(d,tf,sym)
+def signal(d,tf,sym,st):
+    p=prepare(d,tf,sym,st);n=normal(d,tf,sym,st)
     if p and n:return p if p["score"]>=n["score"] else n
     return p or n
 
@@ -664,10 +734,65 @@ def check_live(st):
         keep.append(s)
     st["live"]=keep[-MAX_LIVE:]
 
+def check_shadow(st):
+    keep=[]
+    for s in st.get("shadow") or []:
+        tf=s.get("tf")
+        if tf not in TF:continue
+        d=candles(s["sym"],TF[tf][0],300)
+        if d is None:keep.append(s);continue
+        ts0=int(s.get("sent_ts") or d.ts.iloc[-1])
+        f=d[d.ts>ts0]
+        if len(f)==0:keep.append(s);continue
+
+        sl,tp,side=s["sl"],s["tp"],s["dir"]
+        ent=s.get("entry",0) or 0
+        res_status=None
+        for _,r in f.iterrows():
+            hs=(r.l<=sl) if side=="LONG" else (r.h>=sl)
+            ht=(r.h>=tp) if side=="LONG" else (r.l<=tp)
+            if hs and ht:
+                r_res=resolve(s["sym"],side,sl,tp,int(r.ts)-3600*1000,int(r.ts),tf)
+                res_status="LOSS" if r_res=="LOSS" else "WIN"
+                break
+            elif hs:
+                res_status="LOSS";break
+            elif ht:
+                res_status="WIN";break
+
+        if res_status is None:
+            if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
+                res_status="TIMEOUT"
+            else:
+                keep.append(s);continue
+
+        hi=f.h.max();lo=f.l.min()
+        mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
+        tp_d=tp-ent if side=="LONG" else ent-tp
+        mfp=hi-ent if side=="LONG" else ent-lo
+        mfe_pct=(mfp/tp_d) if tp_d>0 else 0
+
+        st.setdefault("results",[]).append({
+            "sym":s["sym"],"tf":tf,"dir":side,"type":s.get("type","PREPARE"),
+            "result":res_status,"ts":int(time.time()),
+            "rec_ts":int(time.time()*1000),
+            "score":s.get("score",0),
+            "alert_ts":s.get("alert_ts"),
+            "sig_ts":s.get("sent_ts"),
+            "entry":ent,"sl":sl,"tp":tp,
+            "mfe":round(mfe*100,2),
+            "mfe_pct":round(min(mfe_pct,1.0)*100,1),
+            "shadow":True,
+            "reasons":s.get("reasons",[]),
+        })
+        log("SHADOW",res_status,s["sym"],tf,"+".join(s.get("reasons",[])),f"MFE={mfe*100:.2f}%")
+    st["shadow"]=keep[-MAX_SHADOW:]
+
 def scan():
     btc_cache.clear()
     st=load_state();clean(st)
     check_live(st)
+    check_shadow(st)
     save_state(st)
     daily_report(st)
     ss=coins()
@@ -682,11 +807,10 @@ def scan():
             if stop:break
             try:
                 dd=candles(sym,bar,n)
-                s=signal(dd,tf,sym)
+                s=signal(dd,tf,sym,st)
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
                 
-                # 止血包1：in_live 死锁，防止重复发单
                 in_live = False
                 for lv_item in st.get("live", []):
                     if lv_item.get("sym") == s["sym"] and lv_item.get("tf") == tf:
