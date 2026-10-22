@@ -311,7 +311,11 @@ def _shadow_line(sub):
     l=sum(1 for r in sub if r["result"]=="LOSS")
     to=sum(1 for r in sub if r["result"]=="TIMEOUT")
     t=w+l
-    return f"止盈{w} 止损{l} 超时{to} 胜率{(w/t*100) if t else 0:.0f}%"
+    
+    mfes=[r["mfe"] for r in sub if "mfe" in r]
+    mfe_avg=sum(mfes)/len(mfes) if mfes else 0
+    
+    return f"止盈{w} 止损{l} 超时{to} 胜率{(w/t*100) if t else 0:.0f}% MFE均{mfe_avg:.2f}%"
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
