@@ -363,10 +363,10 @@ def daily_report(st):
             sub_tf=[r for r in shadow_rs if r.get("tf")==tf_x]
             if not sub_tf:continue
             L.append(f"  【{tf_x}】")
-            for typ in ("PREPARE","TREND","BRE [{AKOUT"):
+            for typ in ("PREPARE","TREND","BREAKOUT"):
                 sub_typ=[r for r in sub_tf if r.get("type")==typ]
                 if not sub_typ:continue
-                L.append(f"   TYP[typ]}]")
+                L.append(f"    [{TYP[typ]}]")
                 groups={}
                 for r in sub_typ:
                     k="+".join(r.get("reasons") or ["?"])
