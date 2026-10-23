@@ -327,6 +327,7 @@ def daily_report(st):
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
     for tf,typ,lb in combos:
+        if typ=="BREAKOUT":continue # 日报屏蔽突破
         sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
         w=sum(1 for r in sub if r["result"]=="WIN")
         l=sum(1 for r in sub if r["result"]=="LOSS")
@@ -358,7 +359,7 @@ def daily_report(st):
     la=sum(alllm)/len(alllm) if alllm else 0
     lpa=sum(alllmp)/len(alllmp) if alllmp else 0
     ta=sum(alltm)/len(alltm) if alltm else 0
-    L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto}(不计胜率) 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
+    L.append(f"警报 合计(仅埋伏趋势)：止盈{tw} 保本{tbe} 止损{tl} 超时{tto}(不计胜率) 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
     if shadow_rs or st.get("shadow"):
@@ -367,7 +368,7 @@ def daily_report(st):
             sub_tf=[r for r in shadow_rs if r.get("tf")==tf_x]
             if not sub_tf:continue
             L.append(f"  【{tf_x}】")
-            for typ in ("PREPARE","TREND","BREAKOUT"):
+            for typ in ("PREPARE","TREND"): # 屏蔽突破的影子单统计
                 sub_typ=[r for r in sub_tf if r.get("type")==typ]
                 if not sub_typ:continue
                 L.append(f"    [{TYP[typ]}]")
@@ -378,12 +379,41 @@ def daily_report(st):
                 for k in sorted(groups.keys()):
                     L.append(f"      被拦[{k}]：{_shadow_line(groups[k])}")
                 L.append(f"      小计：{_shadow_line(sub_typ)}")
-        pend=len(st.get("shadow",[]))
+        
+        # 新增：正在跟的影子单明细
+        shadow_live_rows=[]
+        for s in st.get("shadow",[]):
+            if s.get("type")=="BREAKOUT":continue # 不看突破
+            tf=s.get("tf")
+            if tf not in TF:continue
+            d=candles(s["sym"],TF[tf][0],300)
+            if d is None:continue
+            ts0=int(s.get("sent_ts") or d.ts.iloc[-1])
+            f=d[d.ts>ts0]
+            if len(f)==0:continue
+            ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0;side=s["dir"]
+            if ent and tp_v:
+                tpd=tp_v-ent if side=="LONG" else ent-tp_v
+                mfp=f.h.max()-ent if side=="LONG" else ent-f.l.min()
+                mfe_pct=mfp/tpd if tpd>0 else 0
+            else:mfe_pct=0
+            shadow_live_rows.append((s,mfe_pct))
+        
+        shadow_live_rows.sort(key=lambda x:-x[1])
+        if shadow_live_rows:
+            L.append(f"\n👻 影子在跟明细（{len(shadow_live_rows)}条，按止盈进度降序）：")
+            for s,pct in shadow_live_rows:
+                sym_s=s["sym"].replace("-USDT-SWAP","")
+                t_str=datetime.fromtimestamp(s["sent_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M") if s.get("sent_ts") else ""
+                reasons_s="+".join(s.get("reasons",[]))
+                L.append(f"  {s['tf']}{TYP[s['type']]} {sym_s} {DIR[s['dir']]} 被拦[{reasons_s}] 分数{s.get('score',0)} 入场{s.get('entry',0):.8g} 止损{s.get('sl',0):.8g} 止盈{s.get('tp',0):.8g} 进度{pct*100:.0f}% 开仓{t_str}")
+
+        pend=len([x for x in st.get("shadow",[]) if x.get("type")!="BREAKOUT"])
         full_tag="（已满，暂停记录新影子）" if pend>=MAX_SHADOW else ""
         L.append(f"  影子在跟：{pend}/{MAX_SHADOW} 条{full_tag}")
         L.append(f"  口径：影子单 sl/tp 按各自类型真实逻辑算，跟到止盈/止损/超时；不代表没过滤就能赚")
 
-    wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
+    wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r and r.get("type")!="BREAKOUT"]
     wins.sort(key=lambda x:-x.get("score",0))
     if wins:
         L.append(f"\n🏆 止盈明细（{len(wins)}条，按分数降序）：")
@@ -392,7 +422,7 @@ def daily_report(st):
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
 
-    bes=[r for r in rs if r["result"]=="BE" and "mfe" in r]
+    bes=[r for r in rs if r["result"]=="BE" and "mfe" in r and r.get("type")!="BREAKOUT"]
     bes.sort(key=lambda x:-x.get("score",0))
     if bes:
         L.append(f"\n🛡️ 保本明细（{len(bes)}条，按分数降序）：")
@@ -401,7 +431,7 @@ def daily_report(st):
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
 
-    tos=[r for r in rs if r["result"]=="TIMEOUT" and "mfe" in r]
+    tos=[r for r in rs if r["result"]=="TIMEOUT" and "mfe" in r and r.get("type")!="BREAKOUT"]
     tos.sort(key=lambda x:-(x.get("mfe_pct",0)))
     if tos:
         L.append(f"\n⏰ 超时明细（{len(tos)}条，按止盈进度降序）：")
@@ -411,7 +441,7 @@ def daily_report(st):
             to_str=datetime.fromtimestamp(r["rec_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M") if r.get("rec_ts") else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} 超时{to_str}")
 
-    losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r]
+    losses=[r for r in rs if r["result"]=="LOSS" and "mfe" in r and r.get("type")!="BREAKOUT"]
     losses.sort(key=lambda x:-(x.get("mfe_pct",0)))
     if losses:
         L.append(f"\n📋 止损明细（{len(losses)}条，按止盈进度降序，止盈=100%）：")
@@ -423,6 +453,7 @@ def daily_report(st):
             
     live_rows=[]
     for s in lv:
+        if s.get("type")=="BREAKOUT":continue # 不看突破
         tf=s.get("tf")
         if tf not in TF:continue
         d=candles(s["sym"],TF[tf][0],300)
