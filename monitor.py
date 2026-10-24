@@ -234,9 +234,12 @@ def fmt_time(ts):
     return datetime.fromtimestamp(ts/1000,BJ_TZ).strftime("%m-%d %H:%M") if ts else ""
 
 def fmt_line(r):
-    sym=r["sym"].replace("-USDT-SWAP",""); t=fmt_time(r.get("alert_ts") or r.get("sig_ts"))
+    sym=r["sym"].replace("-USDT-SWAP","")
+    t_open=fmt_time(r.get("alert_ts") or r.get("sig_ts"))
+    t_close=fmt_time(r.get("rec_ts")) # 新增：读取平仓时间
     mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
-    return f"  {r['tf']}{TYP[r['type']]} {sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('sl',0):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} {t}"
+    close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
+    return f"  {r['tf']}{TYP[r['type']]} {sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('sl',0):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}"
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
@@ -290,7 +293,7 @@ def daily_report(st):
     if lv:
         L.append(f"\n📋 在追明细（{len(lv)}条）：")
         for s in lv:
-            L.append(f"  {s['tf']}{TYP[s['type']]} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('sl',0):.8g} 盈{s.get('tp',0):.8g} {fmt_time(s.get('alert_ts'))}")
+            L.append(f"  {s['tf']}{TYP[s['type']]} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('sl',0):.8g} 盈{s.get('tp',0):.8g} 开:{fmt_time(s.get('alert_ts'))}")
             
     if post_long(L):st["last_report"]=today;log("DAILY_REPORT",tw,tl,tto,len(lv))
     else:log("DAILY_REPORT 发送失败")
