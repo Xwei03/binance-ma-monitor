@@ -26,8 +26,6 @@ def log(*args):print(*args)
 TF={"1H":("1H",500,73,6),"1D":("1D",300,72,4)}
 MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
-GAP_ATR={"1H":2.5,"1D":2.5}
-GAP_CAP={"1H":0.04,"1D":0.10}
 PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
 DEDUP_BARS,COOL_BARS=8,12
@@ -349,11 +347,9 @@ def prepare(d,tf,sym,st):
     e20,e60=ema(d.c,20),ema(d.c,60)
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12); vr3=d.v.iloc[-3:].mean()/max(d.v.iloc[-13:-3].mean(),1e-12)
     ar,body,bs=av/base,abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],av*.01),btc(TF[tf][0])
-    h4_bias,h4_e20,h4_e60=h4_filter(sym),0,0
-    d4=candles(sym,"4H",300)
-    if d4 is not None and len(d4)>=60:h4_e20,h4_e60=ema(d4.c,20).iloc[-1],ema(d4.c,60).iloc[-1]
-    gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
+    h4_bias=h4_filter(sym)
     out=[]
+    gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
     for side in ("LONG","SHORT"):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
@@ -384,12 +380,8 @@ def prepare(d,tf,sym,st):
         rr=((tp-p)/risk) if side=="LONG" else ((p-tp)/risk)
         if s>=need and rr>=need_rr:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
-            emab=(tf=="1H" and h4_e20>0 and ((side=="LONG" and h4_e20<=h4_e60) or (side=="SHORT" and h4_e20>=h4_e60)))
-            if h4b or emab:
-                reasons=[]
-                if h4b:reasons.append("h4_bias")
-                if emab:reasons.append("ema4h")
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,int(s));continue
+            if h4b:
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["h4_bias"],d,int(s));continue
             out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
@@ -400,10 +392,8 @@ def normal(d,tf,sym,st):
     e20s,e60s,e120s=ema(d.c,20),ema(d.c,60),ema(d.c,120)
     e20,e60,e120=e20s.iloc[-1],e60s.iloc[-1],e120s.iloc[-1]
     vr,body,bs=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12),abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01),btc(TF[tf][0])
-    h4_bias,h4_e20,h4_e60=h4_filter(sym),0,0
-    d4=candles(sym,"4H",300)
-    if d4 is not None and len(d4)>=60:h4_e20,h4_e60=ema(d4.c,20).iloc[-1],ema(d4.c,60).iloc[-1]
-    gap_max,chase=min(GAP_ATR.get(tf,2.5)*a/p,GAP_CAP.get(tf,0.04)),CHASE_ATR.get(tf,2.5)
+    h4_bias=h4_filter(sym)
+    chase=CHASE_ATR.get(tf,2.5)
     out=[]
     def add(side,typ,sl,tp,need_rr):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]) or (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
@@ -411,9 +401,11 @@ def normal(d,tf,sym,st):
         rr=((tp-p)/(p-sl)) if side=="LONG" else ((p-tp)/(sl-p))
         if rr<=0:return
         
-        # 偏离度硬过滤：偏离不能超过 1.0 ATR
-        if side=="LONG" and (p-e20) > 1.0*a: return
-        if side=="SHORT" and (e20-p) > 1.0*a: return
+        # 核心改进：1.0 ATR 偏离限制，仅针对趋势单 (TREND)
+        if typ=="TREND":
+            if side=="LONG" and (p-e20) > 1.0*a: return
+            if side=="SHORT" and (e20-p) > 1.0*a: return
+            
         # 均线粘合过滤：间距必须大于0.3 ATR
         if abs(e20-e60) < 0.3*a: return
 
@@ -423,15 +415,11 @@ def normal(d,tf,sym,st):
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
         if rr>=need_rr and s>=TF[tf][2]:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
-            emab=(tf=="1H" and h4_e20>0 and ((side=="LONG" and h4_e20<=h4_e60) or (side=="SHORT" and h4_e20>=h4_e60)))
-            if h4b or emab:
-                reasons=[]
-                if h4b:reasons.append("h4_bias")
-                if emab:reasons.append("ema4h")
-                rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s));return
+            if h4b:
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,int(s));return
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
     tr_rr=1.5
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4]:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
@@ -439,7 +427,7 @@ def normal(d,tf,sym,st):
                 tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                 if price>p and (tp_c-p)/risk>=tr_rr:add("LONG","TREND",sl_c,tp_c,tr_rr);done=True;break
             if not done:add("LONG","TREND",sl_c,p+5*a,tr_rr)
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4]:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
