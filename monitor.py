@@ -76,11 +76,12 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
+    # 1. 源头过滤：强制只保留 instCategory=="1" (纯币圈)
+    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live" and x.get("instCategory")=="1"}
     vol={x["instId"]:float(x.get("volCcy24h",0) or 0)*float(x.get("last",0) or 0) for x in b}
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
     r=sorted(valid,key=lambda x:vol.get(x,0),reverse=True)[:150]
-    if r:log(f"[币种] ≥{MIN_VOL/1e8:.2f}亿的共{len(valid)}个，取{len(r)}个")
+    if r:log(f"[币种] 纯币圈 ≥{MIN_VOL/1e8:.2f}亿的共{len(valid)}个，取{len(r)}个")
     return r
 
 def candles(sym,bar,n=300):
@@ -236,7 +237,7 @@ def fmt_time(ts):
 def fmt_line(r):
     sym=r["sym"].replace("-USDT-SWAP","")
     t_open=fmt_time(r.get("alert_ts") or r.get("sig_ts"))
-    t_close=fmt_time(r.get("rec_ts")) # 新增：读取平仓时间
+    t_close=fmt_time(r.get("rec_ts"))
     mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
     close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
     return f"  {r['tf']}{TYP[r['type']]} {sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('sl',0):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}"
@@ -349,7 +350,10 @@ def prepare(d,tf,sym,st):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max:continue
-        if abs(e20.iloc[-1]-e60.iloc[-1])>1.0*av:continue
+        
+        # 2. 均线粘合过滤：间距必须大于0.3 ATR
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue
+
         if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]):continue
         if (side=="LONG" and (p-e60.iloc[-1])<0.5*av) or (side=="SHORT" and (e60.iloc[-1]-p)<0.5*av):continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
@@ -398,6 +402,13 @@ def normal(d,tf,sym,st):
         if sl==p or tp==p:return
         rr=((tp-p)/(p-sl)) if side=="LONG" else ((p-tp)/(sl-p))
         if rr<=0:return
+        
+        # 1. 偏离度硬过滤：偏离不能超过 1.0 ATR
+        if side=="LONG" and (p-e20) > 1.0*a: return
+        if side=="SHORT" and (e20-p) > 1.0*a: return
+        # 2. 均线粘合过滤：间距必须大于0.3 ATR
+        if abs(e20-e60) < 0.3*a: return
+
         v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
         if typ!="TREND":v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
@@ -444,7 +455,7 @@ def signal(d,tf,sym,st):
 def send_signal(st,s):
     t="🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号"
     stt="贴均线埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
-    txt=f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n⚠️ 请自行确认是否为大宗商品/美股等传统资产\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
+    txt=f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
     if post(txt):
         key=sdk(s["sym"],s["tf"],s["dir"],s["type"]); st.setdefault("sent",{})[key]=int(s["sent_ts"]); s["alert_ts"]=int(time.time()*1000); s["be_sent"]=False
         if key not in {sdk(x.get("sym",""),x.get("tf",""),x.get("dir",""),x.get("type","")) for x in st.get("live",[])}:
@@ -505,8 +516,19 @@ def scan():
                 if sdk(s["sym"],tf,s["dir"],s["type"]) in st.get("cool",{}) and bars_since(dd,int(st["cool"][sdk(s["sym"],tf,s["dir"],s["type"])]))<COOL_BARS:continue
                 s["sent_ts"]=int(dd.ts.iloc[-1]); hits.append(s)
             except Exception as e:log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
+        
         hits.sort(key=lambda x:-x["score"]); cnt=0
         for s in hits[:MAX_SEND_PER_SCAN]:
+            # 3. 单方向持仓限制：同方向最多发3单
+            long_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="LONG")
+            short_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="SHORT")
+            if s["dir"]=="LONG" and long_cnt >= 3:
+                log("LIMIT_LONG skip", s["sym"])
+                continue
+            if s["dir"]=="SHORT" and short_cnt >= 3:
+                log("LIMIT_SHORT skip", s["sym"])
+                continue
+                
             if send_signal(st,s):cnt+=1
             time.sleep(.3)
         save_state(st); log(f"[{tf}] hits {len(hits)} sent {cnt}")
