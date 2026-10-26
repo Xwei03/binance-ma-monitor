@@ -76,7 +76,7 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    # 1. 源头过滤：强制只保留 instCategory=="1" (纯币圈)
+    # 源头过滤：强制只保留 instCategory=="1" (纯币圈)
     live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live" and x.get("instCategory")=="1"}
     vol={x["instId"]:float(x.get("volCcy24h",0) or 0)*float(x.get("last",0) or 0) for x in b}
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
@@ -276,6 +276,14 @@ def daily_report(st):
                     w,l=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS")
                     mfes=[r["mfe"] for r in sb if "mfe" in r]; ma=sum(mfes)/len(mfes) if mfes else 0
                     L.append(f"    被拦[{k}]：盈{w} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%")
+                    for r in sb:
+                        sym_s=r["sym"].replace("-USDT-SWAP","")
+                        t_open=fmt_time(r.get("alert_ts") or r.get("sig_ts"))
+                        t_close=fmt_time(r.get("rec_ts"))
+                        mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
+                        close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
+                        L.append(f"      {DIR.get(r.get('dir',''),'?')} {sym_s} 入{r.get('entry',0):.8g} 损{r.get('sl',0):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}")
+
         sh_live=[x for x in st.get("shadow",[]) if x.get("type")!="BREAKOUT"]
         if sh_live:
             L.append(f"\n👻 影子在跟明细（{len(sh_live)}条）：")
@@ -351,7 +359,7 @@ def prepare(d,tf,sym,st):
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max:continue
         
-        # 2. 均线粘合过滤：间距必须大于0.3 ATR
+        # 均线粘合过滤：间距必须大于0.3 ATR
         if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue
 
         if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]):continue
@@ -403,10 +411,10 @@ def normal(d,tf,sym,st):
         rr=((tp-p)/(p-sl)) if side=="LONG" else ((p-tp)/(sl-p))
         if rr<=0:return
         
-        # 1. 偏离度硬过滤：偏离不能超过 1.0 ATR
+        # 偏离度硬过滤：偏离不能超过 1.0 ATR
         if side=="LONG" and (p-e20) > 1.0*a: return
         if side=="SHORT" and (e20-p) > 1.0*a: return
-        # 2. 均线粘合过滤：间距必须大于0.3 ATR
+        # 均线粘合过滤：间距必须大于0.3 ATR
         if abs(e20-e60) < 0.3*a: return
 
         v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
@@ -519,7 +527,7 @@ def scan():
         
         hits.sort(key=lambda x:-x["score"]); cnt=0
         for s in hits[:MAX_SEND_PER_SCAN]:
-            # 3. 单方向持仓限制：同方向最多发3单
+            # 单方向持仓限制：同方向最多发3单
             long_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="LONG")
             short_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="SHORT")
             if s["dir"]=="LONG" and long_cnt >= 3:
