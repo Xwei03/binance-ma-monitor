@@ -355,8 +355,10 @@ def prepare(d,tf,sym,st):
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max:continue
         
-        # 均线粘合过滤：间距必须大于0.3 ATR
+        # 均线粘合下限：间距必须大于0.3 ATR
         if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue
+        # 均线发散上限（防追高）：间距必须小于1.5 ATR
+        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue
 
         if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]):continue
         if (side=="LONG" and (p-e60.iloc[-1])<0.5*av) or (side=="SHORT" and (e60.iloc[-1]-p)<0.5*av):continue
@@ -371,6 +373,10 @@ def prepare(d,tf,sym,st):
         need,need_rr=73 if tf=="1H" else 72,1.5 if tf=="1H" else 2.0
         sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
+        
+        # 止损上限过滤：止损空间 > 2.5% 直接毙
+        if risk / p > 0.025: continue
+
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup"); tp=None
         for price,_ in cands:
             cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
@@ -401,13 +407,18 @@ def normal(d,tf,sym,st):
         rr=((tp-p)/(p-sl)) if side=="LONG" else ((p-tp)/(sl-p))
         if rr<=0:return
         
-        # 核心改进：1.0 ATR 偏离限制，仅针对趋势单 (TREND)
+        # 1.0 ATR 偏离限制，仅针对趋势单 (TREND)
         if typ=="TREND":
             if side=="LONG" and (p-e20) > 1.0*a: return
             if side=="SHORT" and (e20-p) > 1.0*a: return
             
-        # 均线粘合过滤：间距必须大于0.3 ATR
+        # 均线粘合下限：间距必须大于0.3 ATR
         if abs(e20-e60) < 0.3*a: return
+        # 均线发散上限（防追高）：间距必须小于1.5 ATR
+        if abs(e20-e60) > 1.5*a: return
+
+        # 止损上限过滤：止损空间 > 2.5% 直接毙
+        if abs(p-sl)/p > 0.025: return
 
         v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
         if typ!="TREND":v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
@@ -515,16 +526,6 @@ def scan():
         
         hits.sort(key=lambda x:-x["score"]); cnt=0
         for s in hits[:MAX_SEND_PER_SCAN]:
-            # 单方向持仓限制：同方向最多发3单
-            long_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="LONG")
-            short_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="SHORT")
-            if s["dir"]=="LONG" and long_cnt >= 3:
-                log("LIMIT_LONG skip", s["sym"])
-                continue
-            if s["dir"]=="SHORT" and short_cnt >= 3:
-                log("LIMIT_SHORT skip", s["sym"])
-                continue
-                
             if send_signal(st,s):cnt+=1
             time.sleep(.3)
         save_state(st); log(f"[{tf}] hits {len(hits)} sent {cnt}")
