@@ -354,6 +354,9 @@ def prepare(d,tf,sym,st):
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max:continue
         
+        # 埋伏单：恶劣形态排除（实体不能大于1.5 ATR）
+        if abs(p - d.o.iloc[-1]) / av > 1.5: continue
+
         # 均线发散上限：间距必须小于1.5 ATR（防追高）
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue
         # 均线粘合下限：间距必须大于0.3 ATR（防震荡）
@@ -375,22 +378,23 @@ def prepare(d,tf,sym,st):
         if risk / p > 0.025: continue # 止损上限2.5%
 
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup"); tp=None
-        # 动态空间过滤：如果最近的阻力/支撑位距离不够，直接毙
         if cands:
             first_price = cands[0][0]
             space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
-            if space < max(0.015, 1.5*av/p): continue
+            # 动态空间过滤：如果前方空间不够 2R，直接毙掉
+            if space < risk/p * 2.0: continue
             for price,_ in cands:
                 cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
                 if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
                     tp=cd;break
         if tp is None:tp=p+(2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p-(2.0 if tf!="1H" else 2.2)*risk
-        rr=((tp-p)/risk) if side=="LONG" else ((p-tp)/risk)
-        if s>=need and rr>=need_rr:
+        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
+        
+        if s>=need and rr_net>=need_rr:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
             if h4b:
                 rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["h4_bias"],d,int(s));continue
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym,st):
@@ -406,58 +410,80 @@ def normal(d,tf,sym,st):
     def add(side,typ,sl,tp,need_rr):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]) or (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
         if sl==p or tp==p:return
-        rr=((tp-p)/(p-sl)) if side=="LONG" else ((p-tp)/(sl-p))
-        if rr<=0:return
         
+        # 恶劣形态排除法：防放量破位大K线（非突破单）
+        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": return
+
         # 均线发散上限（防追高）
         if abs(e20-e60) > 1.5*a: return
         # 均线粘合下限
         if abs(e20-e60) < 0.3*a: return
 
-        # 恶劣形态排除法：防放量破位大K线
-        if body > 1.5 and typ != "BREAKOUT": return
-
-        if typ=="TREND":
-            if side=="LONG" and (p-e20) > 1.0*a: return
-            if side=="SHORT" and (e20-p) > 1.0*a: return
-
         # 止损上限2.5%
         if abs(p-sl)/p > 0.025: return
+
+        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
+        if rr_net <= 0: return
 
         v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
         if typ!="TREND":v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
-        if rr>=need_rr and s>=TF[tf][2]:
+        
+        if rr_net>=need_rr and s>=TF[tf][2]:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
             if h4b:
                 rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,int(s));return
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net})
+            
     tr_rr=1.5
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4]:
+    
+    # 轨道A：追击（只有偏离小于1.0 ATR才追）
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.0*a:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
             if cands:
                 first_price = cands[0][0]
-                if (first_price - p)/p < max(0.015, 1.5*a/p): pass # 空间不够，直接放弃
+                if (first_price - p)/p < risk/p * 2.0: pass
                 else:
                     for price,_ in cands:
                         tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                         if price>p and (tp_c-p)/risk>=tr_rr:add("LONG","TREND",sl_c,tp_c,tr_rr);done=True;break
-            if not done: pass # 如果连阻力都没有，或者空间不够，就不发
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4]:
+            if not done: pass
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.0*a:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
             if cands:
                 first_price = cands[0][0]
-                if (p - first_price)/p < max(0.015, 1.5*a/p): pass # 空间不够
+                if (p - first_price)/p < risk/p * 2.0: pass
                 else:
                     for price,_ in cands:
                         tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
                         if price<p and (p-tp_c)/risk>=tr_rr:add("SHORT","TREND",sl_c,tp_c,tr_rr);done=True;break
             if not done: pass
+
+    # 轨道B：回调（偏离大于1.0 ATR，等回踩EMA20附近再进）
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) > 1.0*a and (p-e20) < 2.5*a:
+        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
+        if risk>0:
+            cands=find_swing_levels(d,tf,p,"res");done=False
+            if cands:
+                for price,_ in cands:
+                    tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
+                    if price>p and (tp_c-p)/risk>=tr_rr:add("LONG","TREND",sl_c,tp_c,tr_rr);done=True;break
+            if not done: pass
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) > 1.0*a and (e20-p) < 2.5*a:
+        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
+        if risk>0:
+            cands=find_swing_levels(d,tf,p,"sup");done=False
+            if cands:
+                for price,_ in cands:
+                    tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
+                    if price<p and (p-tp_c)/risk>=tr_rr:add("SHORT","TREND",sl_c,tp_c,tr_rr);done=True;break
+            if not done: pass
+
     hi,lo,real_body=d.h.iloc[-12:-2].max(),d.l.iloc[-12:-2].min(),abs(p-d.o.iloc[-1])
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase*a and 1.5<=vr<8.0 and (d.h.iloc[-1]-max(p,d.o.iloc[-1]))<max(real_body,a*0.01)*0.5:
         sl_c=hi-0.2*a;risk=p-sl_c
