@@ -74,7 +74,6 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    # 源头过滤：强制只保留 instCategory=="1" (纯币圈)
     live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live" and x.get("instCategory")=="1"}
     vol={x["instId"]:float(x.get("volCcy24h",0) or 0)*float(x.get("last",0) or 0) for x in b}
     valid=[s for s in live if vol.get(s,0)>=MIN_VOL]
@@ -355,10 +354,10 @@ def prepare(d,tf,sym,st):
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max:continue
         
-        # 均线粘合下限：间距必须大于0.3 ATR
-        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue
-        # 均线发散上限（防追高）：间距必须小于1.5 ATR
+        # 均线发散上限：间距必须小于1.5 ATR（防追高）
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue
+        # 均线粘合下限：间距必须大于0.3 ATR（防震荡）
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue
 
         if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]):continue
         if (side=="LONG" and (p-e60.iloc[-1])<0.5*av) or (side=="SHORT" and (e60.iloc[-1]-p)<0.5*av):continue
@@ -373,15 +372,18 @@ def prepare(d,tf,sym,st):
         need,need_rr=73 if tf=="1H" else 72,1.5 if tf=="1H" else 2.0
         sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
-        
-        # 止损上限过滤：止损空间 > 2.5% 直接毙
-        if risk / p > 0.025: continue
+        if risk / p > 0.025: continue # 止损上限2.5%
 
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup"); tp=None
-        for price,_ in cands:
-            cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
-            if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
-                tp=cd;break
+        # 动态空间过滤：如果最近的阻力/支撑位距离不够，直接毙
+        if cands:
+            first_price = cands[0][0]
+            space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
+            if space < max(0.015, 1.5*av/p): continue
+            for price,_ in cands:
+                cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
+                if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
+                    tp=cd;break
         if tp is None:tp=p+(2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p-(2.0 if tf!="1H" else 2.2)*risk
         rr=((tp-p)/risk) if side=="LONG" else ((p-tp)/risk)
         if s>=need and rr>=need_rr:
@@ -407,17 +409,19 @@ def normal(d,tf,sym,st):
         rr=((tp-p)/(p-sl)) if side=="LONG" else ((p-tp)/(sl-p))
         if rr<=0:return
         
-        # 1.0 ATR 偏离限制，仅针对趋势单 (TREND)
+        # 均线发散上限（防追高）
+        if abs(e20-e60) > 1.5*a: return
+        # 均线粘合下限
+        if abs(e20-e60) < 0.3*a: return
+
+        # 恶劣形态排除法：防放量破位大K线
+        if body > 1.5 and typ != "BREAKOUT": return
+
         if typ=="TREND":
             if side=="LONG" and (p-e20) > 1.0*a: return
             if side=="SHORT" and (e20-p) > 1.0*a: return
-            
-        # 均线粘合下限：间距必须大于0.3 ATR
-        if abs(e20-e60) < 0.3*a: return
-        # 均线发散上限（防追高）：间距必须小于1.5 ATR
-        if abs(e20-e60) > 1.5*a: return
 
-        # 止损上限过滤：止损空间 > 2.5% 直接毙
+        # 止损上限2.5%
         if abs(p-sl)/p > 0.025: return
 
         v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
@@ -434,18 +438,26 @@ def normal(d,tf,sym,st):
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
-            for price,_ in cands:
-                tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
-                if price>p and (tp_c-p)/risk>=tr_rr:add("LONG","TREND",sl_c,tp_c,tr_rr);done=True;break
-            if not done:add("LONG","TREND",sl_c,p+5*a,tr_rr)
+            if cands:
+                first_price = cands[0][0]
+                if (first_price - p)/p < max(0.015, 1.5*a/p): pass # 空间不够，直接放弃
+                else:
+                    for price,_ in cands:
+                        tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
+                        if price>p and (tp_c-p)/risk>=tr_rr:add("LONG","TREND",sl_c,tp_c,tr_rr);done=True;break
+            if not done: pass # 如果连阻力都没有，或者空间不够，就不发
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4]:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
-            for price,_ in cands:
-                tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
-                if price<p and (p-tp_c)/risk>=tr_rr:add("SHORT","TREND",sl_c,tp_c,tr_rr);done=True;break
-            if not done:add("SHORT","TREND",sl_c,p-5*a,tr_rr)
+            if cands:
+                first_price = cands[0][0]
+                if (p - first_price)/p < max(0.015, 1.5*a/p): pass # 空间不够
+                else:
+                    for price,_ in cands:
+                        tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
+                        if price<p and (p-tp_c)/risk>=tr_rr:add("SHORT","TREND",sl_c,tp_c,tr_rr);done=True;break
+            if not done: pass
     hi,lo,real_body=d.h.iloc[-12:-2].max(),d.l.iloc[-12:-2].min(),abs(p-d.o.iloc[-1])
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase*a and 1.5<=vr<8.0 and (d.h.iloc[-1]-max(p,d.o.iloc[-1]))<max(real_body,a*0.01)*0.5:
         sl_c=hi-0.2*a;risk=p-sl_c
