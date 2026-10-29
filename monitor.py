@@ -23,7 +23,6 @@ def hdr():
 def now_bj():return datetime.now(BJ_TZ)
 def log(*args):print(*args)
 
-# 周期配置 (bar, 拉取数量)
 TF={"1H":("1H",500),"1D":("1D",300)}
 MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
@@ -353,9 +352,7 @@ def prepare(d,tf,sym,st):
     out=[]
     gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
     
-    # 1H: 70分, 1D: 68分
     need = 70 if tf=="1H" else 68
-    # 净盈亏比门槛: 2.0R
     need_rr = 2.0
 
     for side in ("LONG","SHORT"):
@@ -363,11 +360,11 @@ def prepare(d,tf,sym,st):
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max:continue
         
-        if abs(p - d.o.iloc[-1]) / av > 1.5: continue # 恶劣形态排除
-        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue # 均线发散上限
-        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue # 均线粘合下限
+        if abs(p - d.o.iloc[-1]) / av > 1.5: continue 
+        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue 
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue 
 
-        # 左侧动能衰竭
+        # 左侧动能衰竭（仅埋伏单生效）
         cnt_dir = sum(1 for i in range(1,5) if (d.c.iloc[-1] > d.c.iloc[-1-i] if side=="LONG" else d.c.iloc[-1] < d.c.iloc[-1-i]))
         if cnt_dir >= 4: continue
         if abs(p - d.c.iloc[-13]) / d.c.iloc[-13] > 2.5 * av / p: continue
@@ -384,7 +381,7 @@ def prepare(d,tf,sym,st):
         s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
         sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
-        if risk / p > 0.025: continue # 止损上限2.5%
+        if risk / p > 0.025: continue 
 
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup"); tp=None
         if cands:
@@ -416,16 +413,16 @@ def normal(d,tf,sym,st):
     chase=CHASE_ATR.get(tf,2.5)
     out=[]
     def add(side,typ,sl,tp,need_rr):
-        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]) or (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return
-        if sl==p or tp==p:return
+        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]) or (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return False
+        if sl==p or tp==p:return False
         
-        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": return
-        if abs(e20-e60) > 1.5*a: return
-        if abs(e20-e60) < 0.3*a: return
-        if abs(p-sl)/p > 0.025: return
+        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": return False
+        if abs(e20-e60) > 1.5*a: return False
+        if abs(e20-e60) < 0.3*a: return False
+        if abs(p-sl)/p > 0.025: return False
 
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        if rr_net <= 0: return
+        if rr_net <= 0: return False
 
         v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
         if typ!="TREND":v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
@@ -438,21 +435,16 @@ def normal(d,tf,sym,st):
         if rr_net>=need_rr and s>=need:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
             if h4b:
-                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,int(s));return
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,int(s));return False
             out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"track":""})
+            return True
+        return False
             
-    tr_rr=2.0 # 趋势单净盈亏比2.0R
-    bo_rr=1.8 # 突破单净盈亏比1.8R
-
-    # 左侧动能衰竭（趋势单用）
-    cnt_up = sum(1 for i in range(1,5) if d.c.iloc[-1] > d.c.iloc[-1-i])
-    cnt_dn = sum(1 for i in range(1,5) if d.c.iloc[-1] < d.c.iloc[-1-i])
-    accum_up = abs(p - d.c.iloc[-13]) / d.c.iloc[-13] > 2.5 * a / p
-    valid_up = (cnt_up < 4) and not accum_up
-    valid_dn = (cnt_dn < 4) and not accum_up
+    tr_rr=2.0
+    bo_rr=1.8
 
     # 轨道A
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.0*a and valid_up:
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.0*a:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
@@ -464,7 +456,7 @@ def normal(d,tf,sym,st):
                         if price>p and (tp_c-p)/risk>=tr_rr:
                             if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
             if not done: pass
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.0*a and valid_dn:
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.0*a:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
@@ -478,7 +470,7 @@ def normal(d,tf,sym,st):
             if not done: pass
 
     # 轨道B
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) > 1.0*a and (p-e20) < 2.5*a and valid_up:
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) > 1.0*a and (p-e20) < 2.5*a:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
@@ -488,7 +480,7 @@ def normal(d,tf,sym,st):
                     if price>p and (tp_c-p)/risk>=tr_rr:
                         if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
             if not done: pass
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) > 1.0*a and (e20-p) < 2.5*a and valid_dn:
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) > 1.0*a and (e20-p) < 2.5*a:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
@@ -519,14 +511,12 @@ def send_signal(st,s):
     track_tag=f"[轨道{s['track']}]" if s.get("track") else ""
     t = f"🚨 警报 {t} {track_tag}"
     
-    # 同向超额警告
     lng_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="LONG")
     sht_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="SHORT")
     warn_tag = ""
     if (s["dir"]=="LONG" and lng_cnt>=3) or (s["dir"]=="SHORT" and sht_cnt>=3):
         warn_tag = "⚠️[超额警告] "
 
-    # 计算 TP1 和 TP2
     tp1 = s["entry"] + (s["entry"]-s["sl"]) if s["dir"]=="LONG" else s["entry"] - (s["sl"]-s["entry"])
     tp2 = s["tp"]
     
@@ -539,7 +529,7 @@ def send_signal(st,s):
     
     if post(txt):
         key=sdk(s["sym"],s["tf"],s["dir"],s["type"]); st.setdefault("sent",{})[key]=int(s["sent_ts"]); s["alert_ts"]=int(time.time()*1000); s["be_sent"]=False
-        s["tp1_hit"] = False # 状态初始化
+        s["tp1_hit"] = False
         if key not in {sdk(x.get("sym",""),x.get("tf",""),x.get("dir",""),x.get("type","")) for x in st.get("live",[])}:
             st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts","alert_ts","be_sent","track","tp1_hit") if k in s})
         log("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"]);return True
@@ -555,19 +545,17 @@ def check_live(st):
         ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1]); f=d[d.ts>ts0]
         if len(f)==0:keep.append(s);continue
         
-        # 1R 极值回溯判断
         if not s.get("tp1_hit", False):
             tp1 = s["entry"] + (s["entry"]-s["sl"]) if s["dir"]=="LONG" else s["entry"] - (s["sl"]-s["entry"])
             for _, r in f.iterrows():
                 hit_1r = (r.h >= tp1) if s["dir"]=="LONG" else (r.l <= tp1)
                 if hit_1r:
                     s["tp1_hit"] = True
-                    s["sl"] = s["entry"] # 后台强制推保本
+                    s["sl"] = s["entry"]
                     post(f"⚠️ [保本提醒] {s['sym']} 盘中已触及 1R！\n请立刻平仓 50%，并将剩余止损推至开仓价 {s['entry']:.8g}。")
                     log("PUSH_BE", s["sym"])
                     break
                     
-        # 判断输赢（优先级：先查原止损，再查原止盈。但因为推了保本，如果推了保本打平，就记BE）
         res_status = None
         for _, r in f.iterrows():
             hs = (r.l <= s["sl"]) if s["dir"]=="LONG" else (r.h >= s["sl"])
@@ -579,23 +567,18 @@ def check_live(st):
                 else: res_status="WIN"
                 break
             elif hs:
-                if s.get("tp1_hit"):
-                    res_status="BE"
-                else:
-                    res_status="LOSS"
+                if s.get("tp1_hit"): res_status="BE"
+                else: res_status="LOSS"
                 break
             elif ht:
                 res_status="WIN"
                 break
                 
-        # 动态时间止损（24根 1H / 10根 1D）
         if res_status is None:
             limit_bars = 24 if tf=="1H" else 10
             if bars_since(d, ts0) >= limit_bars:
                 mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s.get("entry",0),s["sl"],s["tp"])
-                if mfp < 0.5:
-                    res_status = "TIMEOUT"
-                elif bars_since(d, ts0) >= MAX_HOLD.get(tf,100):
+                if mfp < 0.5 or bars_since(d, ts0) >= MAX_HOLD.get(tf,100):
                     res_status = "TIMEOUT"
 
         if res_status:
