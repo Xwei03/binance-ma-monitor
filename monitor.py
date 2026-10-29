@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.2 终极合体版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.3
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -39,31 +39,6 @@ DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False;last_req=[0.0]
-SECTOR_MAP = {} 
-SECTOR_FAIL_TS = 0
-
-def fetch_sectors():
-    global SECTOR_MAP, SECTOR_FAIL_TS
-    if time.time() - SECTOR_FAIL_TS < 3600: return
-    try:
-        r = requests.get("https://data-svc.artemisxyz.com/asset/", timeout=5)
-        assets = r.json().get("assets", [])
-        tmp = {}
-        for a in assets:
-            sym = a.get("symbol", "").upper()
-            groups = (a.get("tags") or {}).get("groups") or []
-            if sym and groups:
-                tag = groups[0].get("value", "未知")
-                tmp[sym] = tag.upper()
-        if tmp:
-            SECTOR_MAP = tmp
-    except Exception as e:
-        log("[SECTOR] 获取失败，降级:", type(e).__name__)
-        SECTOR_FAIL_TS = time.time()
-
-def get_sector(sym):
-    base_sym = sym.replace("-USDT-SWAP", "")
-    return SECTOR_MAP.get(base_sym, "未知")
 
 def tf_run(tf):
     return datetime.now(timezone.utc).hour==0 if tf=="1D" else True
@@ -138,20 +113,25 @@ def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 def atr(d):return pd.concat([d.h-d.l,(d.h-d.c.shift()).abs(),(d.l-d.c.shift()).abs()],axis=1).max(axis=1).rolling(14).mean()
 def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
 
-def find_swing_levels(d,tf,p,side):
+def find_swing_levels(d,tf,p,side,a=None):
     n_l, n_r, look = 5, (2 if tf=="1H" else 3), (500 if tf=="1H" else 300)
     arr_h, arr_l, arr_v = d.h.iloc[-look:-1].values, d.l.iloc[-look:-1].values, d.v.iloc[-look:-1].values
     m=len(arr_h)
     if m<n_l+n_r+1:return []
     avg_vol=d.v.iloc[-21:-1].mean()
     if pd.isna(avg_vol) or avg_vol<=0:avg_vol=1
+    use_atr = (tf=="1H" and a is not None and a > 0)
     cands=[]
     for i in range(n_l,m-n_r):
         if side=="res" and arr_h[i]>=arr_h[i-n_l:i].max() and arr_h[i]>=arr_h[i+1:i+n_r+1].max() and arr_h[i]>p:
-            price=arr_h[i]; tol=price*0.005; hits=int(((arr_h>price-tol)&(arr_h<price+tol)).sum())
+            price=arr_h[i]
+            tol = 0.5*a if use_atr else price*0.005
+            hits=int(((arr_h>price-tol)&(arr_h<price+tol)).sum())
             cands.append((price,(arr_v[i]/avg_vol)*(1+(i/m))+hits*0.5))
         elif side=="sup" and arr_l[i]<=arr_l[i-n_l:i].min() and arr_l[i]<=arr_l[i+1:i+n_r+1].min() and arr_l[i]<p:
-            price=arr_l[i]; tol=price*0.005; hits=int(((arr_l>price-tol)&(arr_l<price+tol)).sum())
+            price=arr_l[i]
+            tol = 0.5*a if use_atr else price*0.005
+            hits=int(((arr_l>price-tol)&(arr_l<price+tol)).sum())
             cands.append((price,(arr_v[i]/avg_vol)*(1+(i/m))+hits*0.5))
     if not cands:return []
     cands.sort(key=lambda x:-x[1])
@@ -160,7 +140,13 @@ def find_swing_levels(d,tf,p,side):
         if used[i]:continue
         price, score = cands[i]; group=[price]; used[i]=True
         for j in range(i+1,len(cands)):
-            if not used[j] and abs(cands[j][0]-price)/price<0.003:group.append(cands[j][0]);used[j]=True
+            if not used[j]:
+                if use_atr:
+                    close = abs(cands[j][0]-price) < 0.5*a
+                else:
+                    close = abs(cands[j][0]-price)/price < 0.003
+                if close:
+                    group.append(cands[j][0]); used[j]=True
         merged.append((sum(group)/len(group),score))
     merged=[x for x in merged if x[1]>=0.5]
     if not merged:return []
@@ -170,12 +156,12 @@ def find_swing_levels(d,tf,p,side):
 def calc_sl_struct(d,tf,p,side,a):
     sl_cap, buf = (2.0 if tf=="1H" else 2.5)*a, 1.0*a
     if side=="LONG":
-        sup_list=find_swing_levels(d,tf,p,"sup")
+        sup_list=find_swing_levels(d,tf,p,"sup",a)
         if not sup_list:return p - sl_cap
         sl_c = sup_list[0][0] - buf
         return p - sl_cap if (p - sl_c) > sl_cap else sl_c
     else:
-        res_list=find_swing_levels(d,tf,p,"res")
+        res_list=find_swing_levels(d,tf,p,"res",a)
         if not res_list:return p + sl_cap
         sl_c = res_list[0][0] + buf
         return p + sl_cap if (sl_c - p) > sl_cap else sl_c
@@ -213,16 +199,13 @@ def is_cooling(st,sym,tf,side,typ,d):
     for pool in ["cool", "sent"]:
         info = st.get(pool,{}).get(key)
         if not info: continue
-        if isinstance(info, (int, float)): 
-            if bars_since(d, int(info)) < 12: return True
-        else:
-            ts = info.get("ts", 0)
-            p_cool = info.get("p", 0)
-            a_cool = info.get("a", 0)
-            if bars_since(d, ts) < DEDUP_BARS: return True
-            p_now = d.c.iloc[-1]
-            if a_cool > 0 and abs(p_now - p_cool) <= 1.5 * a_cool:
-                return True
+        ts = info.get("ts", 0)
+        p_cool = info.get("p", 0)
+        a_cool = info.get("a", 0)
+        if bars_since(d, ts) < DEDUP_BARS: return True
+        p_now = d.c.iloc[-1]
+        if a_cool > 0 and abs(p_now - p_cool) <= 1.5 * a_cool:
+            return True
     return False
 
 def mark(st,sym,tf,side,typ,ts,p,a,where="sent"):
@@ -278,7 +261,6 @@ def post_long(lines):
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
     def is_keep(info):
-        if isinstance(info, (int, float)): return info >= c
         return info.get("ts", 0) >= c
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if is_keep(v)}
     st["cool"]={k:v for k,v in st.get("cool",{}).items() if is_keep(v)}
@@ -295,9 +277,8 @@ def fmt_line(r):
     t_close=fmt_time(r.get("rec_ts"))
     mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
     track_tag=f"[{r['track']}]" if r.get("track") else ""
-    sector=get_sector(r["sym"])
     close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
-    return f"  {r['tf']}{TYP[r['type']]}{track_tag} [{sector}]{sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}"
+    return f"  {r['tf']}{TYP[r['type']]}{track_tag} {sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}"
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
@@ -322,33 +303,29 @@ def daily_report(st):
     L.append(f"统计时间：{now_bj().strftime('%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（全量拦截记录，仅观测）")
+        L.append(f"\n👻 影子单（按主理由分组，附加理由算次数）")
         for tf in ("1H","1D"):
             for typ in ("PREPARE","TREND","BREAKOUT"):
                 sub=[r for r in sh if r.get("tf")==tf and r.get("type")==typ]
                 if not sub:continue
                 L.append(f"  【{tf} {TYP[typ]}】")
                 groups={}
-                for r in sub: groups.setdefault("+".join(r.get("reasons") or ["?"]),[]).append(r)
+                extra_count={}
+                for r in sub:
+                    reasons = r.get("reasons") or ["?"]
+                    main = reasons[0]
+                    groups.setdefault(main,[]).append(r)
+                    for extra in reasons[1:]:
+                        extra_count[extra] = extra_count.get(extra,0)+1
                 for k,sb in sorted(groups.items()):
                     w,l,be=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS"),sum(1 for r in sb if r["result"]=="BE")
                     mfes=[r["mfe"] for r in sb if "mfe" in r]; ma=sum(mfes)/len(mfes) if mfes else 0
                     L.append(f"    被拦[{k}]：盈{w} 保{be} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%")
-                    for r in sb:
-                        sector=get_sector(r["sym"])
-                        sym_s=r["sym"].replace("-USDT-SWAP","")
-                        t_open=fmt_time(r.get("alert_ts") or r.get("sig_ts"))
-                        t_close=fmt_time(r.get("rec_ts"))
-                        mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
-                        close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
-                        L.append(f"      [{sector}]{sym_s} {DIR.get(r.get('dir',''),'?')} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}")
+                if extra_count:
+                    extras = "，".join(f"{k}出现{v}次" for k,v in sorted(extra_count.items(), key=lambda x:-x[1]))
+                    L.append(f"    附加理由：{extras}")
 
         sh_live=[x for x in st.get("shadow",[])]
-        if sh_live:
-            L.append(f"\n👻 影子在跟明细（{len(sh_live)}条）：")
-            for s in sh_live:
-                sector=get_sector(s["sym"])
-                L.append(f"  [{sector}]{s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]} {DIR[s['dir']]} 被拦[{'+'.join(s.get('reasons',[]))}] 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g}")
         L.append(f"  影子在跟：{len(sh_live)}/{MAX_SHADOW} 条")
         L.append(f"  口径：影子单 sl/tp 按真实逻辑算，跟到止盈/止损/超时")
 
@@ -363,8 +340,7 @@ def daily_report(st):
         L.append(f"\n📋 在追明细（{len(lv)}条）：")
         for s in lv:
             track_tag=f"[{s.get('track','')}]" if s.get("track") else ""
-            sector=get_sector(s["sym"])
-            L.append(f"  [{sector}]{s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]}{track_tag} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g} 开:{fmt_time(s.get('alert_ts'))}")
+            L.append(f"  {s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]}{track_tag} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g} 开:{fmt_time(s.get('alert_ts'))}")
             
     if post_long(L):st["last_report"]=today;log("DAILY_REPORT",tw,tl,tto,len(lv))
     else:log("DAILY_REPORT 发送失败")
@@ -416,7 +392,7 @@ def prepare(d,tf,sym,st):
     gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
     
     need = 70 if tf=="1H" else 68
-    need_rr = 2.0
+    need_rr = 1.5
 
     for side in ("LONG","SHORT"):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
@@ -447,7 +423,7 @@ def prepare(d,tf,sym,st):
         if reasons:
             sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
             if risk>0:
-                tp = p + 2.0*risk if side=="LONG" else p - 2.0*risk
+                tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
                 rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,0)
             continue
 
@@ -456,23 +432,24 @@ def prepare(d,tf,sym,st):
         if risk<=0:continue
         
         if risk / p > 0.025: 
-            tp = p + 2.0*risk if side=="LONG" else p - 2.0*risk
+            tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
             rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["止损超上限"],d,0)
             continue
 
-        cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup"); tp=None
+        cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
+        space = 0
         if cands:
             first_price = cands[0][0]
             space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
-            if space < risk/p * 2.0: 
-                tp_shadow = p + 2.0*risk if side=="LONG" else p - 2.0*risk
+            if space < risk/p * need_rr: 
+                tp_shadow = p + need_rr*risk if side=="LONG" else p - need_rr*risk
                 rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp_shadow,["空间不足"],d,0)
                 continue
             for price,_ in cands:
                 cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
                 if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
                     tp=cd;break
-        if tp is None:tp=p+(2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p-(2.0 if tf!="1H" else 2.2)*risk
+        if tp is None:tp=p+need_rr*risk if side=="LONG" else p-need_rr*risk
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
         
         s = 40
@@ -492,8 +469,8 @@ def prepare(d,tf,sym,st):
 
 def normal(d,tf,sym,st):
     if d is None or len(d)<210:return
-    p,a,aa=d.c.iloc[-1],atr(d).iloc[-1],atr(d).iloc[-6:-1].mean()
-    if pd.isna(a) or pd.isna(aa):return
+    p,a=d.c.iloc[-1],atr(d).iloc[-1]
+    if pd.isna(a):return
     e20s,e60s,e120s=ema(d.c,20),ema(d.c,60),ema(d.c,120)
     e20,e60,e120=e20s.iloc[-1],e60s.iloc[-1],e120s.iloc[-1]
     vr,body,bs=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12),abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],a*.01),btc(TF[tf][0])
@@ -543,64 +520,64 @@ def normal(d,tf,sym,st):
         out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"track":""})
         return True
             
-    tr_rr=2.0
+    tr_rr=1.5
     bo_rr=1.8
 
-    # 轨道A (追击)
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.0*a:
+    # 轨道A (追击) - 偏离均线1.5 ATR以内
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.5*a:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
         if risk>0:
-            cands=find_swing_levels(d,tf,p,"res");done=False
+            cands=find_swing_levels(d,tf,p,"res",a);done=False
             if cands:
                 first_price = cands[0][0]
-                if (first_price - p)/p >= risk/p * 2.0:
+                if (first_price - p)/p >= risk/p * tr_rr:
                     for price,_ in cands:
                         tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                         if price>p and (tp_c-p)/risk>=tr_rr:
                             if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.0*a:
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.5*a:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
         if risk>0:
-            cands=find_swing_levels(d,tf,p,"sup");done=False
+            cands=find_swing_levels(d,tf,p,"sup",a);done=False
             if cands:
                 first_price = cands[0][0]
-                if (p - first_price)/p >= risk/p * 2.0:
+                if (p - first_price)/p >= risk/p * tr_rr:
                     for price,_ in cands:
                         tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
                         if price<p and (p-tp_c)/risk>=tr_rr:
                             if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
 
-    # 轨道B (回踩)
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and 0 <= (p-e20)/p <= 0.01 and d.c.iloc[-1] > d.o.iloc[-1]:
+    # 轨道B (回踩) - 离均线1.5 ATR以内
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and 0 <= (p-e20) <= 1.5*a and d.c.iloc[-1] > d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
         if risk>0:
-            cands=find_swing_levels(d,tf,p,"res");done=False
+            cands=find_swing_levels(d,tf,p,"res",a);done=False
             if cands:
                 first_price = cands[0][0]
-                if (first_price - p)/p >= risk/p * 2.0:
+                if (first_price - p)/p >= risk/p * tr_rr:
                     for price,_ in cands:
                         tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                         if price>p and (tp_c-p)/risk>=tr_rr:
                             if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
                 if not done and not any(x for x in st.get("shadow",[]) if x["sym"]==sym and "空间不足" in x.get("reasons",[]) and x["sent_ts"]==d.ts.iloc[-1]): 
-                    rec_shadow(st,sym,tf,"LONG","TREND",p,sl_c,p+2*risk,["空间不足"],d,0)
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and 0 <= (e20-p)/p <= 0.01 and d.c.iloc[-1] < d.o.iloc[-1]:
+                    rec_shadow(st,sym,tf,"LONG","TREND",p,sl_c,p+tr_rr*risk,["空间不足"],d,0)
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and 0 <= (e20-p) <= 1.5*a and d.c.iloc[-1] < d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
         if risk>0:
-            cands=find_swing_levels(d,tf,p,"sup");done=False
+            cands=find_swing_levels(d,tf,p,"sup",a);done=False
             if cands:
                 first_price = cands[0][0]
-                if (p - first_price)/p >= risk/p * 2.0:
+                if (p - first_price)/p >= risk/p * tr_rr:
                     for price,_ in cands:
                         tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
                         if price<p and (p-tp_c)/risk>=tr_rr:
                             if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
                 if not done and not any(x for x in st.get("shadow",[]) if x["sym"]==sym and "空间不足" in x.get("reasons",[]) and x["sent_ts"]==d.ts.iloc[-1]): 
-                    rec_shadow(st,sym,tf,"SHORT","TREND",p,sl_c,p-2*risk,["空间不足"],d,0)
+                    rec_shadow(st,sym,tf,"SHORT","TREND",p,sl_c,p-tr_rr*risk,["空间不足"],d,0)
 
     hi,lo,real_body=d.h.iloc[-12:-2].max(),d.l.iloc[-12:-2].min(),abs(p-d.o.iloc[-1])
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase*a and 1.5<=vr<8.0 and (d.h.iloc[-1]-max(p,d.o.iloc[-1]))<max(real_body,a*0.01)*0.5:
@@ -624,9 +601,8 @@ def send_signal(st,s):
 
     tp1 = s["entry"] + (s["entry"]-s["sl"]) if s["dir"]=="LONG" else s["entry"] - (s["sl"]-s["entry"])
     tp2 = s["tp"]
-    sector = get_sector(s["sym"])
     
-    txt=f"宝宝巴士🚌上车就赚\n{t}  {CN[s['tf']]}  [{sector}]{s['sym']}\n"
+    txt=f"宝宝巴士🚌上车就赚\n{t}  {CN[s['tf']]}  {s['sym']}\n"
     txt+=f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  净盈亏比{s['rr']:.2f}\n"
     txt+=f"入场{s['entry']:.8g}  止损{s['sl']:.8g}\n"
     txt+=f"TP1(1R减仓推保本): {tp1:.8g}\n"
@@ -787,7 +763,6 @@ def process_positions(st, is_shadow=False):
     st[pool_key] = keep[-MAX_SHADOW:] if is_shadow else keep
 
 def scan():
-    fetch_sectors()
     btc_cache.clear(); st=load_state(); clean(st)
     process_positions(st, is_shadow=False)
     process_positions(st, is_shadow=True)
