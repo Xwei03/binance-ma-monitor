@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V4.0 核心交易满血版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V5.8
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -28,12 +28,10 @@ MAX_HOLD={"1H":100,"1D":30}
 CHASE_ATR={"1H":2.5,"1D":1.5}
 PREPARE_GAP_ATR=1.5
 PREPARE_GAP_CAP={"1H":0.02,"1D":0.06}
-DEDUP_BARS,COOL_BARS=8,12
+DEDUP_BARS=8
 KEEP_SENT_DAYS,KEEP_RESULT_DAYS=110,7
-MAX_SEND_PER_SCAN=20 
-MAX_LIVE=20
 MIN_VOL=10000000
-MAX_SHADOW=50
+MAX_SHADOW=100 
 SHADOW_KEEP_DAYS=3
 SHADOW_COOL_KEEP_DAYS=30
 CN={"1H":"1小时","1D":"1天"}
@@ -41,6 +39,31 @@ DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
 
 cache={};btc_cache={};stop=False;last_req=[0.0]
+SECTOR_MAP = {} 
+SECTOR_FAIL_TS = 0
+
+def fetch_sectors():
+    global SECTOR_MAP, SECTOR_FAIL_TS
+    if time.time() - SECTOR_FAIL_TS < 3600: return
+    try:
+        r = requests.get("https://data-svc.artemisxyz.com/asset/", timeout=5)
+        assets = r.json().get("assets", [])
+        tmp = {}
+        for a in assets:
+            sym = a.get("symbol", "").upper()
+            groups = (a.get("tags") or {}).get("groups") or []
+            if sym and groups:
+                tag = groups[0].get("value", "未知")
+                tmp[sym] = tag.upper()
+        if tmp:
+            SECTOR_MAP = tmp
+    except Exception as e:
+        log("[SECTOR] 获取失败，降级:", type(e).__name__)
+        SECTOR_FAIL_TS = time.time()
+
+def get_sector(sym):
+    base_sym = sym.replace("-USDT-SWAP", "")
+    return SECTOR_MAP.get(base_sym, "未知")
 
 def tf_run(tf):
     return datetime.now(timezone.utc).hour==0 if tf=="1D" else True
@@ -95,6 +118,21 @@ def candles(sym,bar,n=300):
         if d.ts.iloc[-1]+bar_ms>int(time.time()*1000):d=d.iloc[:-1].reset_index(drop=True)
         cache[k]=(time.time(),d);return d
     except Exception as e:log(f"[CANDLES] {sym} {bar} {type(e).__name__} {e}");return
+
+def candles_range(sym, bar, ts0, ts1):
+    k=(sym,bar,ts0,ts1)
+    if k in cache and time.time()-cache[k][0]<30:return cache[k][1]
+    p = {"instId": sym, "bar": bar, "after": str(ts1), "limit": "100"}
+    x = get("/api/v5/market/history-candles", p)
+    if not x: x = get("/api/v5/market/candles", p)
+    if not x: return None
+    try:
+        d=pd.DataFrame([[int(a[0]),float(a[1]),float(a[2]),float(a[3]),float(a[4]),float(a[5]),a[8]] for a in reversed(x)],
+                       columns=["ts","o","h","l","c","v","ok"])
+        d=d[d.ok=="1"].reset_index(drop=True)
+        d=d[(d.ts>=ts0)&(d.ts<ts1)].reset_index(drop=True)
+        cache[k]=(time.time(),d);return d
+    except Exception as e:log(f"[CANDLES_RANGE] {sym} {bar} {type(e).__name__} {e}");return
 
 def ema(s,n):return s.ewm(span=n,adjust=False).mean()
 def atr(d):return pd.concat([d.h-d.l,(d.h-d.c.shift()).abs(),(d.l-d.c.shift()).abs()],axis=1).max(axis=1).rolling(14).mean()
@@ -170,31 +208,48 @@ def save_state(st):
 
 def sdk(sym,tf,side,typ):return f"{sym}|{tf}|{side}|{typ}"
 
-def too_soon(st,sym,tf,side,typ,d,bars):
-    ts=st.get("cool",{}).get(sdk(sym,tf,side,typ)) or st.get("sent",{}).get(sdk(sym,tf,side,typ))
-    return ts and bars_since(d,int(ts))<bars
+def is_cooling(st,sym,tf,side,typ,d):
+    key = sdk(sym,tf,side,typ)
+    for pool in ["cool", "sent"]:
+        info = st.get(pool,{}).get(key)
+        if not info: continue
+        if isinstance(info, (int, float)): 
+            if bars_since(d, int(info)) < 12: return True
+        else:
+            ts = info.get("ts", 0)
+            p_cool = info.get("p", 0)
+            a_cool = info.get("a", 0)
+            if bars_since(d, ts) < DEDUP_BARS: return True
+            p_now = d.c.iloc[-1]
+            if a_cool > 0 and abs(p_now - p_cool) <= 1.5 * a_cool:
+                return True
+    return False
 
-def mark(st,sym,tf,side,typ,d,where="sent"):
-    st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
+def mark(st,sym,tf,side,typ,ts,p,a,where="sent"):
+    st.setdefault(where,{})[sdk(sym,tf,side,typ)] = {"ts": int(ts), "p": float(p), "a": float(a)}
 
 def rec(st,s,r,mfe,mfe_pct,mae,mae_pct):
     e={"sym":s["sym"],"tf":s["tf"],"dir":s["dir"],"type":s["type"],"track":s.get("track",""),"result":r,"ts":int(time.time()),
        "rec_ts":int(time.time()*1000),"score":s.get("score",0),"mfe":round(mfe*100,2),
-       "mfe_pct":round(min(mfe_pct,1.0)*100,1),"mae":round(mae*100,2),"mae_pct":round(min(mae_pct,1.0)*100,1)}
+       "mfe_pct":round(min(mfe_pct,1.0)*100,1),"mae":round(mae*100,2),"mae_pct":round(min(mae_pct,1.0)*100,1),
+       "orig_sl": s.get("orig_sl", s["sl"])}
     for k in ("alert_ts","sent_ts","entry","sl","tp"):
         if s.get(k):e["sig_ts" if k=="sent_ts" else k]=s[k]
     st.setdefault("results",[]).append(e)
 
 def rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,score):
     if any(lv.get("sym")==sym and lv.get("tf")==tf for lv in st.get("live",[])):return
-    if len(st.get("shadow",[]))>=MAX_SHADOW:return log("SHADOW_FULL skip",sym)
-    key=f"{sym}|{tf}|{side}|{','.join(reasons)}"; cool=st.setdefault("shadow_cool",{})
-    if key in cool and bars_since(d,cool[key])<COOL_BARS:return
+    if len(st.get("shadow",[]))>=MAX_SHADOW:return
+    key=f"{sym}|{tf}|{side}|{','.join(sorted(reasons))}"
+    cool=st.setdefault("shadow_cool",{})
+    if key in cool and bars_since(d,int(cool[key])) < 12:return
     if abs(p-sl)<1e-12 or abs(p-tp)<1e-12:return
+    
+    a_now = atr(d).iloc[-1]
     st.setdefault("shadow",[]).append({"sym":sym,"tf":tf,"dir":side,"type":typ,"reasons":list(reasons),
-        "entry":float(p),"sl":float(sl),"tp":float(tp),"score":int(score),"ts":int(time.time()),"sent_ts":int(d.ts.iloc[-1])})
-    cool[key]=int(d.ts.iloc[-1])
-    log("SHADOW_REC",sym,tf,side,typ,"+".join(reasons),score)
+        "entry":float(p),"sl":float(sl),"tp":float(tp),"orig_sl":float(sl),"score":int(score),"ts":int(time.time()),"sent_ts":int(d.ts.iloc[-1]),
+        "a": float(a_now) if not pd.isna(a_now) else 0.0})
+    cool[key]={"ts":int(d.ts.iloc[-1]),"p":float(p),"a":float(a_now) if not pd.isna(a_now) else 0.0}
 
 def post(txt):
     if not WEBHOOK:return False
@@ -222,9 +277,12 @@ def post_long(lines):
 
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
-    st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
-    st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=c}
-    st["shadow_cool"]={k:v for k,v in st.get("shadow_cool",{}).items() if v>=(int(time.time())-SHADOW_COOL_KEEP_DAYS*86400)*1000}
+    def is_keep(info):
+        if isinstance(info, (int, float)): return info >= c
+        return info.get("ts", 0) >= c
+    st["sent"]={k:v for k,v in st.get("sent",{}).items() if is_keep(v)}
+    st["cool"]={k:v for k,v in st.get("cool",{}).items() if is_keep(v)}
+    st["shadow_cool"]={k:v for k,v in st.get("shadow_cool",{}).items() if is_keep(v)}
     kc_a, kc_s = int(time.time())-KEEP_RESULT_DAYS*86400, int(time.time())-SHADOW_KEEP_DAYS*86400
     st["results"]=[r for r in st.get("results",[]) if (r["ts"]>=kc_s if r.get("shadow") else r["ts"]>=kc_a)]
 
@@ -237,19 +295,21 @@ def fmt_line(r):
     t_close=fmt_time(r.get("rec_ts"))
     mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
     track_tag=f"[{r['track']}]" if r.get("track") else ""
+    sector=get_sector(r["sym"])
     close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
-    return f"  {r['tf']}{TYP[r['type']]}{track_tag} {sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('sl',0):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}"
+    return f"  {r['tf']}{TYP[r['type']]}{track_tag} [{sector}]{sym} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}"
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
-    if st.get("last_report")==today or n.hour>=12:return
+    if st.get("last_report")==today:return
     cut=int(time.time())-86400
-    rs=[r for r in st.get("results",[]) if r["ts"]>=cut and not r.get("shadow") and r.get("type")!="BREAKOUT"]
-    sh=[r for r in st.get("results",[]) if r["ts"]>=cut and r.get("shadow") and r.get("type")!="BREAKOUT"]
-    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"]; tw=tl=tbe=tto=0; lv=[x for x in st.get("live",[]) if x.get("type")!="BREAKOUT"]
+    rs=[r for r in st.get("results",[]) if r["ts"]>=cut and not r.get("shadow")]
+    sh=[r for r in st.get("results",[]) if r["ts"]>=cut and r.get("shadow")]
+    lv=[x for x in st.get("live",[])]
     
+    L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"]; tw=tl=tbe=tto=0
     for tf in ("1H","1D"):
-        for typ in ("PREPARE","TREND"):
+        for typ in ("PREPARE","TREND","BREAKOUT"):
             sub=[r for r in rs if r.get("tf")==tf and r.get("type")==typ]
             w,l,be,to=[sum(1 for r in sub if r["result"]==k) for k in ("WIN","LOSS","BE","TIMEOUT")]
             p=sum(1 for x in lv if x.get("tf")==tf and x.get("type")==typ)
@@ -262,31 +322,33 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（被 4H 过滤拦掉的候选，仅观测）")
+        L.append(f"\n👻 影子单（全量拦截记录，仅观测）")
         for tf in ("1H","1D"):
-            for typ in ("PREPARE","TREND"):
+            for typ in ("PREPARE","TREND","BREAKOUT"):
                 sub=[r for r in sh if r.get("tf")==tf and r.get("type")==typ]
                 if not sub:continue
                 L.append(f"  【{tf} {TYP[typ]}】")
                 groups={}
                 for r in sub: groups.setdefault("+".join(r.get("reasons") or ["?"]),[]).append(r)
                 for k,sb in sorted(groups.items()):
-                    w,l=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS")
+                    w,l,be=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS"),sum(1 for r in sb if r["result"]=="BE")
                     mfes=[r["mfe"] for r in sb if "mfe" in r]; ma=sum(mfes)/len(mfes) if mfes else 0
-                    L.append(f"    被拦[{k}]：盈{w} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%")
+                    L.append(f"    被拦[{k}]：盈{w} 保{be} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%")
                     for r in sb:
+                        sector=get_sector(r["sym"])
                         sym_s=r["sym"].replace("-USDT-SWAP","")
                         t_open=fmt_time(r.get("alert_ts") or r.get("sig_ts"))
                         t_close=fmt_time(r.get("rec_ts"))
                         mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
                         close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
-                        L.append(f"      {DIR.get(r.get('dir',''),'?')} {sym_s} 入{r.get('entry',0):.8g} 损{r.get('sl',0):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}")
+                        L.append(f"      [{sector}]{sym_s} {DIR.get(r.get('dir',''),'?')} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}")
 
-        sh_live=[x for x in st.get("shadow",[]) if x.get("type")!="BREAKOUT"]
+        sh_live=[x for x in st.get("shadow",[])]
         if sh_live:
             L.append(f"\n👻 影子在跟明细（{len(sh_live)}条）：")
             for s in sh_live:
-                L.append(f"  {s['tf']}{TYP[s['type']]} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 被拦[{'+'.join(s.get('reasons',[]))}] 入{s.get('entry',0):.8g} 损{s.get('sl',0):.8g} 盈{s.get('tp',0):.8g}")
+                sector=get_sector(s["sym"])
+                L.append(f"  [{sector}]{s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]} {DIR[s['dir']]} 被拦[{'+'.join(s.get('reasons',[]))}] 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g}")
         L.append(f"  影子在跟：{len(sh_live)}/{MAX_SHADOW} 条")
         L.append(f"  口径：影子单 sl/tp 按真实逻辑算，跟到止盈/止损/超时")
 
@@ -301,36 +363,38 @@ def daily_report(st):
         L.append(f"\n📋 在追明细（{len(lv)}条）：")
         for s in lv:
             track_tag=f"[{s.get('track','')}]" if s.get("track") else ""
-            L.append(f"  {s['tf']}{TYP[s['type']]}{track_tag} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('sl',0):.8g} 盈{s.get('tp',0):.8g} 开:{fmt_time(s.get('alert_ts'))}")
+            sector=get_sector(s["sym"])
+            L.append(f"  [{sector}]{s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]}{track_tag} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g} 开:{fmt_time(s.get('alert_ts'))}")
             
     if post_long(L):st["last_report"]=today;log("DAILY_REPORT",tw,tl,tto,len(lv))
     else:log("DAILY_REPORT 发送失败")
 
-def try_res(sym,bar,side,sl,tp,ts0,ts1):
-    need = int((ts1 - ts0) / ({"1m":60000,"5m":300000,"15m":900000,"1H":3600000}[bar])) + 10
-    d=candles(sym,bar,min(need, 300))
-    if d is None:return None
-    f=d[(d.ts>ts0)&(d.ts<=ts1)]
-    for _,r in f.iterrows():
-        hs,ht=(r.l<=sl,r.h>=tp) if side=="LONG" else (r.h>=sl,r.l<=tp)
-        if hs and ht:return "LOSS"
-        if ht:return "WIN"
-        if hs:return "LOSS"
-    return None
-
-def resolve(sym,side,sl,tp,ts0,ts1,tf):
-    for b in ["1m","5m","15m"]:
-        r=try_res(sym,b,side,sl,tp,ts0,ts1)
-        if r is not None: return r
-
-def check_hit(f,side,sl,tp,sym,tf):
-    for _, r in f.iterrows():
+def resolve_hit_order(sym, side, sl, tp, ts0, ts1, tf):
+    bar = "1m" if tf=="1H" else "15m"
+    d=candles_range(sym, bar, ts0, ts1)
+    if d is None or len(d)==0: return "UNKNOWN" 
+    for _, r in d.iterrows():
         hs = (r.l <= sl) if side == "LONG" else (r.h >= sl)
         ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
-        if hs and ht:return "LOSS" if resolve(sym,side,sl,tp,int(r.ts)-3600000,int(r.ts),tf)=="LOSS" else "WIN"
-        elif hs:return "LOSS"
-        elif ht:return "WIN"
-    return None
+        if hs and ht: return "SL_FIRST" 
+        if hs: return "SL_FIRST"
+        if ht: return "TP_FIRST"
+    return "UNKNOWN"
+
+def try_res(sym,bar,side,sl,tp,ts0,ts1,tf):
+    d=candles_range(sym,bar,ts0,ts1)
+    if d is None or len(d)==0:return "UNKNOWN"
+    for _,r in d.iterrows():
+        hs,ht=(r.l<=sl,r.h>=tp) if side=="LONG" else (r.h>=sl,r.l<=tp)
+        if hs and ht: return "LOSS"
+        if ht:return "WIN"
+        if hs:return "LOSS"
+    return "UNKNOWN"
+
+def resolve(sym,side,sl,tp,ts0,ts1,tf):
+    b = "1m" if tf == "1H" else "15m"
+    r = try_res(sym, b, side, sl, tp, ts0, ts1, tf)
+    return r if r != "UNKNOWN" else "LOSS"
 
 def calc_mfe_mae(f,side,ent,sl,tp):
     hi,lo=f.h.max(),f.l.min()
@@ -346,7 +410,7 @@ def prepare(d,tf,sym,st):
     p,a,av,base=d.c.iloc[-1],atr(d),atr(d).iloc[-1],atr(d).iloc[-21:-1].mean()
     if pd.isna(av) or pd.isna(base):return
     e20,e60=ema(d.c,20),ema(d.c,60)
-    vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12); vr3=d.v.iloc[-3:].mean()/max(d.v.iloc[-13:-3].mean(),1e-12)
+    vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     ar,body,bs=av/base,abs(p-d.o.iloc[-1])/max(d.h.iloc[-1]-d.l.iloc[-1],av*.01),btc(TF[tf][0])
     h4_bias=h4_filter(sym)
     out=[]
@@ -357,32 +421,54 @@ def prepare(d,tf,sym,st):
 
     for side in ("LONG","SHORT"):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
+        
+        reasons = []
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
-        if d_e20<0 or d_e20>gap_max:continue
+        if d_e20<0 or d_e20>gap_max: reasons.append("偏离超限")
         
-        if abs(p - d.o.iloc[-1]) / av > 1.5: continue 
-        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue 
-        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue 
-
-        # 左侧动能衰竭（仅埋伏单生效，防末尾接盘）
-        cnt_dir = sum(1 for i in range(1,5) if (d.c.iloc[-1] > d.c.iloc[-1-i] if side=="LONG" else d.c.iloc[-1] < d.c.iloc[-1-i]))
-        if cnt_dir >= 4: continue
-
-        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]):continue
-        if (side=="LONG" and (p-e60.iloc[-1])<0.5*av) or (side=="SHORT" and (e60.iloc[-1]-p)<0.5*av):continue
-        if vr>=2.0 or ar>1.6 or body>=.65:continue
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
-        if (side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6])) or (side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6])):continue
+        if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
+        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: reasons.append("均线粘合")
         
-        sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
+        is_heavy_trend = False
+        if side == "LONG":
+            if d.c.iloc[-1] > d.c.iloc[-2] > d.c.iloc[-3] > d.c.iloc[-4] > d.c.iloc[-5]:
+                if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*av for i in range(1,5)):
+                    is_heavy_trend = True
+        else:
+            if d.c.iloc[-1] < d.c.iloc[-2] < d.c.iloc[-3] < d.c.iloc[-4] < d.c.iloc[-5]:
+                if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*av for i in range(1,5)):
+                    is_heavy_trend = True
+        if is_heavy_trend: reasons.append("左侧连涨跌超4")
+
+        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): reasons.append("均线排列错误")
+        if vr>=2.0 or ar>1.6 or body>=.65: reasons.append("量能或实体异常")
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
+        
+        if reasons:
+            sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
+            if risk>0:
+                tp = p + 2.0*risk if side=="LONG" else p - 2.0*risk
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,0)
+            continue
+
+        sl=calc_sl_struct(d,tf,p,side,av)
+        risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
-        if risk / p > 0.025: continue 
+        
+        if risk / p > 0.025: 
+            tp = p + 2.0*risk if side=="LONG" else p - 2.0*risk
+            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["止损超上限"],d,0)
+            continue
 
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup"); tp=None
         if cands:
             first_price = cands[0][0]
             space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
-            if space < risk/p * 2.0: continue
+            if space < risk/p * 2.0: 
+                tp_shadow = p + 2.0*risk if side=="LONG" else p - 2.0*risk
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp_shadow,["空间不足"],d,0)
+                continue
             for price,_ in cands:
                 cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
                 if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
@@ -390,14 +476,13 @@ def prepare(d,tf,sym,st):
         if tp is None:tp=p+(2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p-(2.0 if tf!="1H" else 2.2)*risk
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
         
-        # 👇 【全新评分模型（100分制）】
-        s = 40 # 基础分（通过所有硬过滤）
-        if d_e20 <= 0.002: s += 30 # 极贴均线
+        s = 40
+        if d_e20 <= 0.002: s += 30
         elif d_e20 <= 0.005: s += 20
         elif d_e20 <= 0.01: s += 10
         
-        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15 # 大盘顺向
-        if cands and space > risk/p * 3.0: s += 15 # 空间极大
+        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
+        if cands and space > risk/p * 3.0: s += 15
         
         if s>=need and rr_net>=need_rr:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -417,19 +502,26 @@ def normal(d,tf,sym,st):
     chase=CHASE_ATR.get(tf,2.5)
     out=[]
     def add(side,typ,sl,tp,need_rr):
-        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]) or (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):return False
-        if sl==p or tp==p:return False
+        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): return False
+        if sl==p or tp==p: return False
         
-        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": return False
-        if abs(e20-e60) > 1.5*a: return False
-        if abs(e20-e60) < 0.3*a: return False
-        if abs(p-sl)/p > 0.025: return False
-
+        reasons = []
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
+        
+        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
+        if typ != "BREAKOUT":
+            if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
+            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
+            
+        if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
+        
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        if rr_net <= 0: return False
+        if rr_net < need_rr: reasons.append("净盈亏比不足")
+        if reasons:
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,0)
+            return False
 
-        # 👇 【全新评分模型（100分制）】
-        s = 40 # 基础分（通过所有硬过滤）
+        s = 40
         de20 = abs(p-e20)/p
         if de20 <= 0.002: s += 30
         elif de20 <= 0.005: s += 20
@@ -441,20 +533,24 @@ def normal(d,tf,sym,st):
         need = 68 if tf=="1H" else 66
         if typ=="BREAKOUT": need = 75 if tf=="1H" else 73
         
-        if rr_net>=need_rr and s>=need:
-            h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
-            if h4b:
-                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,int(s));return False
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"track":""})
-            return True
-        return False
+        if s < need:
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,["分数不足"],d,s)
+            return False
+
+        h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
+        if h4b:
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,s);return False
+        
+        out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"track":""})
+        return True
             
     tr_rr=2.0
     bo_rr=1.8
 
-    # 轨道A
+    # 轨道A (追击)
     if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.0*a:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
+        sl_c=calc_sl_struct(d,tf,p,"LONG",a)
+        risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
             if cands:
@@ -464,9 +560,9 @@ def normal(d,tf,sym,st):
                         tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                         if price>p and (tp_c-p)/risk>=tr_rr:
                             if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
-            if not done: pass
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.0*a:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
+        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
+        risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
             if cands:
@@ -476,29 +572,36 @@ def normal(d,tf,sym,st):
                         tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
                         if price<p and (p-tp_c)/risk>=tr_rr:
                             if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
-            if not done: pass
 
-    # 轨道B
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) > 1.0*a and (p-e20) < 2.5*a:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
+    # 轨道B (回踩)
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and 0 <= (p-e20)/p <= 0.01 and d.c.iloc[-1] > d.o.iloc[-1]:
+        sl_c=calc_sl_struct(d,tf,p,"LONG",a)
+        risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res");done=False
             if cands:
-                for price,_ in cands:
-                    tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
-                    if price>p and (tp_c-p)/risk>=tr_rr:
-                        if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
-            if not done: pass
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) > 1.0*a and (e20-p) < 2.5*a:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
+                first_price = cands[0][0]
+                if (first_price - p)/p >= risk/p * 2.0:
+                    for price,_ in cands:
+                        tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
+                        if price>p and (tp_c-p)/risk>=tr_rr:
+                            if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
+                if not done and not any(x for x in st.get("shadow",[]) if x["sym"]==sym and "空间不足" in x.get("reasons",[]) and x["sent_ts"]==d.ts.iloc[-1]): 
+                    rec_shadow(st,sym,tf,"LONG","TREND",p,sl_c,p+2*risk,["空间不足"],d,0)
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and 0 <= (e20-p)/p <= 0.01 and d.c.iloc[-1] < d.o.iloc[-1]:
+        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
+        risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup");done=False
             if cands:
-                for price,_ in cands:
-                    tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
-                    if price<p and (p-tp_c)/risk>=tr_rr:
-                        if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
-            if not done: pass
+                first_price = cands[0][0]
+                if (p - first_price)/p >= risk/p * 2.0:
+                    for price,_ in cands:
+                        tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
+                        if price<p and (p-tp_c)/risk>=tr_rr:
+                            if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
+                if not done and not any(x for x in st.get("shadow",[]) if x["sym"]==sym and "空间不足" in x.get("reasons",[]) and x["sent_ts"]==d.ts.iloc[-1]): 
+                    rec_shadow(st,sym,tf,"SHORT","TREND",p,sl_c,p-2*risk,["空间不足"],d,0)
 
     hi,lo,real_body=d.h.iloc[-12:-2].max(),d.l.iloc[-12:-2].min(),abs(p-d.o.iloc[-1])
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase*a and 1.5<=vr<8.0 and (d.h.iloc[-1]-max(p,d.o.iloc[-1]))<max(real_body,a*0.01)*0.5:
@@ -519,17 +622,12 @@ def send_signal(st,s):
     
     track_tag=f"[轨道{s['track']}]" if s.get("track") else ""
     t = f"🚨 警报 {t} {track_tag}"
-    
-    lng_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="LONG")
-    sht_cnt = sum(1 for x in st.get("live",[]) if x.get("dir")=="SHORT")
-    warn_tag = ""
-    if (s["dir"]=="LONG" and lng_cnt>=3) or (s["dir"]=="SHORT" and sht_cnt>=3):
-        warn_tag = "⚠️[超额警告] "
 
     tp1 = s["entry"] + (s["entry"]-s["sl"]) if s["dir"]=="LONG" else s["entry"] - (s["sl"]-s["entry"])
     tp2 = s["tp"]
+    sector = get_sector(s["sym"])
     
-    txt=f"宝宝巴士🚌上车就赚\n{warn_tag}{t}  {CN[s['tf']]}  {s['sym']}\n"
+    txt=f"宝宝巴士🚌上车就赚\n{t}  {CN[s['tf']]}  [{sector}]{s['sym']}\n"
     txt+=f"{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  净盈亏比{s['rr']:.2f}\n"
     txt+=f"入场{s['entry']:.8g}  止损{s['sl']:.8g}\n"
     txt+=f"TP1(1R减仓推保本): {tp1:.8g}\n"
@@ -537,10 +635,15 @@ def send_signal(st,s):
     txt+=f"{stt}\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
     
     if post(txt):
-        key=sdk(s["sym"],s["tf"],s["dir"],s["type"]); st.setdefault("sent",{})[key]=int(s["sent_ts"]); s["alert_ts"]=int(time.time()*1000); s["be_sent"]=False
+        key=sdk(s["sym"],s["tf"],s["dir"],s["type"])
+        a_now = s.get("a", 0)
+        mark(st, s["sym"], s["tf"], s["dir"], s["type"], s["sent_ts"], s["entry"], a_now, "sent")
+        s["alert_ts"]=int(time.time()*1000); s["be_sent"]=False
         s["tp1_hit"] = False
+        s["orig_sl"] = s["sl"]
+        s["tp1_ts"] = 0 
         if key not in {sdk(x.get("sym",""),x.get("tf",""),x.get("dir",""),x.get("type","")) for x in st.get("live",[])}:
-            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts","alert_ts","be_sent","track","tp1_hit") if k in s})
+            st.setdefault("live",[]).append({k:s[k] for k in ("sym","tf","dir","type","entry","sl","tp","score","rr","hi","lo","sent_ts","alert_ts","be_sent","track","tp1_hit","orig_sl","tp1_ts") if k in s})
         log("SEND",s["tf"],s["sym"],s["dir"],s["type"],s["score"]);return True
     return False
 
@@ -552,50 +655,103 @@ def check_live(st):
         d=candles(s["sym"],TF[tf][0],300)
         if d is None:keep.append(s);continue
         ts0=int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1]); f=d[d.ts>ts0]
-        if len(f)==0:keep.append(s);continue
         
+        if len(f)==0:
+            if bars_since(d, ts0) >= MAX_HOLD.get(tf,100):
+                rec(st,s,"TIMEOUT",0,0,0,0)
+                log("TIMEOUT_EMPTY", s["sym"]); continue
+            keep.append(s);continue
+        
+        orig_sl = s.get("orig_sl", s["sl"])
+        res_status = None
+        bar_ms = 86400000 if tf=="1D" else 3600000
+        
+        # 第一个循环：SL 和 1R 一起看
         if not s.get("tp1_hit", False):
-            tp1 = s["entry"] + (s["entry"]-s["sl"]) if s["dir"]=="LONG" else s["entry"] - (s["sl"]-s["entry"])
+            tp1 = s["entry"] + (s["entry"]-orig_sl) if s["dir"]=="LONG" else s["entry"] - (orig_sl-s["entry"])
             for _, r in f.iterrows():
                 hit_1r = (r.h >= tp1) if s["dir"]=="LONG" else (r.l <= tp1)
-                if hit_1r:
+                hit_sl = (r.l <= orig_sl) if s["dir"]=="LONG" else (r.h >= orig_sl)
+                
+                if hit_sl and hit_1r:
+                    r_1m = resolve_hit_order(s["sym"], s["dir"], orig_sl, tp1, int(r.ts), int(r.ts)+bar_ms, tf)
+                    if r_1m == "SL_FIRST" or r_1m == "UNKNOWN":
+                        res_status = "LOSS"
+                    else:
+                        s["tp1_hit"] = True
+                        s["tp1_ts"] = int(r.ts)
+                        s["sl"] = s["entry"] * 1.001 if s["dir"]=="LONG" else s["entry"] * 0.999
+                        post(f"⚠️ [保本提醒] {s['sym']} 盘中已触及 1R！\n请立刻平仓 50%，并将剩余止损推至开仓价 {s['entry']:.8g}。")
+                        log("PUSH_BE", s["sym"])
+                    break
+                elif hit_sl:
+                    res_status = "LOSS"
+                    break
+                elif hit_1r:
                     s["tp1_hit"] = True
-                    s["sl"] = s["entry"]
+                    s["tp1_ts"] = int(r.ts)
+                    s["sl"] = s["entry"] * 1.001 if s["dir"]=="LONG" else s["entry"] * 0.999
                     post(f"⚠️ [保本提醒] {s['sym']} 盘中已触及 1R！\n请立刻平仓 50%，并将剩余止损推至开仓价 {s['entry']:.8g}。")
                     log("PUSH_BE", s["sym"])
                     break
-                    
+        
+        # 只结算 LOSS；WIN/BE 交给第二个循环真实判
+        if res_status == "LOSS":
+            mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s["entry"],orig_sl,s["tp"])
+            mark(st,s["sym"],tf,s["dir"],s.get("type",""),d.ts.iloc[-1], s["entry"], atr(d).iloc[-1], "cool")
+            rec(st,s,"LOSS",mfe,mfp,mae,map_)
+            log("LOSS",s["sym"],tf,f"MFE={mfe*100:.2f}%")
+            continue
+        
+        # 第二个循环：按真实保本价 / TP2 判
         res_status = None
         for _, r in f.iterrows():
-            hs = (r.l <= s["sl"]) if s["dir"]=="LONG" else (r.h >= s["sl"])
-            ht = (r.h >= s["tp"]) if s["dir"]=="LONG" else (r.l <= s["tp"])
-            
-            if hs and ht:
-                r_res = resolve(s["sym"], s["dir"], s["sl"], s["tp"], int(r.ts)-3600000, int(r.ts), tf)
-                if r_res == "LOSS": res_status="LOSS"
-                else: res_status="WIN"
-                break
-            elif hs:
-                if s.get("tp1_hit"): res_status="BE"
-                else: res_status="LOSS"
-                break
-            elif ht:
-                res_status="WIN"
-                break
+            if s.get("tp1_hit"):
+                if r.ts <= s.get("tp1_ts", 0):
+                    continue
+                hs_be = (r.l <= s["sl"]) if s["dir"]=="LONG" else (r.h >= s["sl"])
+                ht = (r.h >= s["tp"]) if s["dir"]=="LONG" else (r.l <= s["tp"])
+                if hs_be and ht:
+                    r_res = resolve(s["sym"], s["dir"], s["sl"], s["tp"], int(r.ts), int(r.ts)+bar_ms, tf)
+                    if r_res == "WIN": res_status="WIN"
+                    else: res_status="BE"
+                    break
+                elif hs_be:
+                    res_status="BE"
+                    break
+                elif ht:
+                    res_status="WIN"
+                    break
+            else:
+                hs = (r.l <= orig_sl) if s["dir"]=="LONG" else (r.h >= orig_sl)
+                ht = (r.h >= s["tp"]) if s["dir"]=="LONG" else (r.l <= s["tp"])
+                if hs and ht:
+                    r_res = resolve(s["sym"], s["dir"], orig_sl, s["tp"], int(r.ts), int(r.ts)+bar_ms, tf)
+                    if r_res == "LOSS" or r_res == "UNKNOWN": res_status="LOSS"
+                    else: res_status="WIN"
+                    break
+                elif hs:
+                    res_status="LOSS"
+                    break
+                elif ht:
+                    res_status="WIN"
+                    break
                 
         if res_status is None:
-            limit_bars = 24 if tf=="1H" else 10
+            limit_bars = 24 if tf=="1H" else 30 
             if bars_since(d, ts0) >= limit_bars:
-                mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s.get("entry",0),s["sl"],s["tp"])
-                if mfp < 0.5 or bars_since(d, ts0) >= MAX_HOLD.get(tf,100):
+                mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s["entry"],orig_sl,s["tp"])
+                risk = abs(s["entry"] - orig_sl)
+                mfe_r = (mfe * s["entry"]) / risk if risk > 0 else 0
+                if mfe_r < 0.5 or bars_since(d, ts0) >= MAX_HOLD.get(tf,100):
                     res_status = "TIMEOUT"
 
         if res_status:
-            mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s.get("entry",0),s["sl"],s["tp"])
-            if res_status in ("LOSS","WIN"):mark(st,s["sym"],tf,s["dir"],s.get("type",""),d,"cool")
+            mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s["entry"],orig_sl,s["tp"])
+            mark(st,s["sym"],tf,s["dir"],s.get("type",""),d.ts.iloc[-1], s["entry"], atr(d).iloc[-1], "cool")
             rec(st,s,res_status,mfe,mfp,mae,map_); log(res_status,s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
         keep.append(s)
-    st["live"]=keep[-MAX_LIVE:]
+    st["live"]=keep 
 
 def check_shadow(st):
     keep=[]
@@ -605,17 +761,98 @@ def check_shadow(st):
         d=candles(s["sym"],TF[tf][0],300)
         if d is None:keep.append(s);continue
         ts0=int(s.get("sent_ts") or d.ts.iloc[-1]); f=d[d.ts>ts0]
-        if len(f)==0:keep.append(s);continue
-        rs=check_hit(f,s["dir"],s["sl"],s["tp"],s["sym"],tf)
+        
+        if len(f)==0:
+            if bars_since(d, ts0) >= MAX_HOLD.get(tf,100):
+                st.setdefault("results",[]).append({
+                    "sym":s["sym"],"tf":tf,"dir":s["dir"],"type":s.get("type","PREPARE"),"track":"",
+                    "result":"TIMEOUT","ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),
+                    "sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),"sl":s["sl"],"orig_sl":s.get("orig_sl",s["sl"]),"tp":s["tp"],
+                    "mfe":0,"mfe_pct":0,"mae":0,"mae_pct":0,
+                    "shadow":True,"reasons":s.get("reasons",[])
+                })
+                log("SHADOW_TIMEOUT_EMPTY", s["sym"]); continue
+            keep.append(s);continue
+        
+        rs = None
+        orig_sl = s.get("orig_sl", s["sl"])
+        bar_ms = 86400000 if tf=="1D" else 3600000
+        
+        # 第一个循环：SL 和 1R 一起看
+        if not s.get("tp1_hit", False):
+            tp1 = s["entry"] + (s["entry"]-orig_sl) if s["dir"]=="LONG" else s["entry"] - (orig_sl-s["entry"])
+            for _, r in f.iterrows():
+                hit_1r = (r.h >= tp1) if s["dir"]=="LONG" else (r.l <= tp1)
+                hit_sl = (r.l <= orig_sl) if s["dir"]=="LONG" else (r.h >= orig_sl)
+                
+                if hit_sl and hit_1r:
+                    r_1m = resolve_hit_order(s["sym"], s["dir"], orig_sl, tp1, int(r.ts), int(r.ts)+bar_ms, tf)
+                    if r_1m == "SL_FIRST" or r_1m == "UNKNOWN":
+                        rs = "LOSS"
+                    else:
+                        s["tp1_hit"] = True
+                        s["tp1_ts"] = int(r.ts)
+                        s["sl"] = s["entry"] * 1.001 if s["dir"]=="LONG" else s["entry"] * 0.999
+                    break
+                elif hit_sl:
+                    rs = "LOSS"
+                    break
+                elif hit_1r:
+                    s["tp1_hit"] = True
+                    s["tp1_ts"] = int(r.ts)
+                    s["sl"] = s["entry"] * 1.001 if s["dir"]=="LONG" else s["entry"] * 0.999
+                    break
+        
+        # 只结算 LOSS；WIN/BE 交给第二个循环真实判
+        if rs == "LOSS":
+            mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s["entry"],orig_sl,s["tp"])
+            st.setdefault("results",[]).append({"sym":s["sym"],"tf":tf,"dir":s["dir"],"type":s.get("type","PREPARE"),"track":"","result":"LOSS","ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),"sl":s["sl"],"orig_sl":orig_sl,"tp":s["tp"],"mfe":round(mfe*100,2),"mfe_pct":round(min(mfp,1.0)*100,1),"mae":round(mae*100,2),"mae_pct":round(min(map_,1.0)*100,1),"shadow":True,"reasons":s.get("reasons",[])})
+            log("SHADOW","LOSS",s["sym"],tf,f"MFE={mfe*100:.2f}%"); continue
+        
+        # 第二个循环：按真实保本价 / TP2 判
+        rs = None
+        for _, r in f.iterrows():
+            if s.get("tp1_hit"):
+                if r.ts <= s.get("tp1_ts", 0):
+                    continue
+                hs_be = (r.l <= s["sl"]) if s["dir"]=="LONG" else (r.h >= s["sl"])
+                ht = (r.h >= s["tp"]) if s["dir"]=="LONG" else (r.l <= s["tp"])
+                if hs_be and ht:
+                    r_res = resolve(s["sym"], s["dir"], s["sl"], s["tp"], int(r.ts), int(r.ts)+bar_ms, tf)
+                    if r_res == "WIN": rs="WIN"
+                    else: rs="BE" 
+                    break
+                elif hs_be:
+                    rs="BE"
+                    break
+                elif ht:
+                    rs="WIN"
+                    break
+            else:
+                hs = (r.l <= orig_sl) if s["dir"]=="LONG" else (r.h >= orig_sl)
+                ht = (r.h >= s["tp"]) if s["dir"]=="LONG" else (r.l <= s["tp"])
+                if hs and ht:
+                    r_res = resolve(s["sym"], s["dir"], orig_sl, s["tp"], int(r.ts), int(r.ts)+bar_ms, tf)
+                    if r_res == "LOSS" or r_res == "UNKNOWN": rs="LOSS"
+                    else: rs="WIN"
+                    break
+                elif hs:
+                    rs="LOSS"
+                    break
+                elif ht:
+                    rs="WIN"
+                    break
+                        
         if rs is None and bars_since(d,ts0)>=MAX_HOLD.get(tf,100):rs="TIMEOUT"
         if rs:
-            mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s.get("entry",0),s["sl"],s["tp"])
-            st.setdefault("results",[]).append({"sym":s["sym"],"tf":tf,"dir":s["dir"],"type":s.get("type","PREPARE"),"track":"","result":rs,"ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),"sl":s["sl"],"tp":s["tp"],"mfe":round(mfe*100,2),"mfe_pct":round(min(mfp,1.0)*100,1),"mae":round(mae*100,2),"mae_pct":round(min(map_,1.0)*100,1),"shadow":True,"reasons":s.get("reasons",[])})
+            mfe,mfp,mae,map_=calc_mfe_mae(f,s["dir"],s["entry"],orig_sl,s["tp"])
+            st.setdefault("results",[]).append({"sym":s["sym"],"tf":tf,"dir":s["dir"],"type":s.get("type","PREPARE"),"track":"","result":rs,"ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),"sl":s["sl"],"orig_sl":orig_sl,"tp":s["tp"],"mfe":round(mfe*100,2),"mfe_pct":round(min(mfp,1.0)*100,1),"mae":round(mae*100,2),"mae_pct":round(min(map_,1.0)*100,1),"shadow":True,"reasons":s.get("reasons",[])})
             log("SHADOW",rs,s["sym"],tf,f"MFE={mfe*100:.2f}%");continue
         keep.append(s)
     st["shadow"]=keep[-MAX_SHADOW:]
 
 def scan():
+    fetch_sectors()
     btc_cache.clear(); st=load_state(); clean(st)
     check_live(st); check_shadow(st); save_state(st); daily_report(st)
     ss=coins()
@@ -627,16 +864,23 @@ def scan():
             if stop:break
             try:
                 dd=candles(sym,bar,n); s=signal(dd,tf,sym,st)
-                if not s or too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
+                a_now = atr(dd).iloc[-1]
+                if not s or is_cooling(st,s["sym"],tf,s["dir"],s["type"],dd):continue
                 if any(lv.get("sym")==s["sym"] and lv.get("tf")==tf for lv in st.get("live",[])):continue
-                if sdk(s["sym"],tf,s["dir"],s["type"]) in st.get("cool",{}) and bars_since(dd,int(st["cool"][sdk(s["sym"],tf,s["dir"],s["type"])]))<COOL_BARS:continue
-                s["sent_ts"]=int(dd.ts.iloc[-1]); hits.append(s)
+                
+                s["sent_ts"]=int(dd.ts.iloc[-1])
+                s["a"]=a_now if not pd.isna(a_now) else 0
+                hits.append(s)
             except Exception as e:log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
         hits.sort(key=lambda x:-x["score"]); cnt=0
-        for s in hits[:MAX_SEND_PER_SCAN]:
-            if send_signal(st,s):cnt+=1
-            time.sleep(.3)
+        for s in hits:
+            try:
+                if send_signal(st,s):cnt+=1
+                time.sleep(.3)
+            except Exception as e:
+                log(f"[SEND_ERR] {s.get('sym')} {type(e).__name__} {e}")
+                
         save_state(st); log(f"[{tf}] hits {len(hits)} sent {cnt}")
     print(now_bj().strftime("%H:%M:%S"),"完成")
 
