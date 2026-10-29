@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.3
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.4 兼容老存档版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -199,13 +199,18 @@ def is_cooling(st,sym,tf,side,typ,d):
     for pool in ["cool", "sent"]:
         info = st.get(pool,{}).get(key)
         if not info: continue
-        ts = info.get("ts", 0)
-        p_cool = info.get("p", 0)
-        a_cool = info.get("a", 0)
-        if bars_since(d, ts) < DEDUP_BARS: return True
-        p_now = d.c.iloc[-1]
-        if a_cool > 0 and abs(p_now - p_cool) <= 1.5 * a_cool:
-            return True
+        # 兼容老存档：如果是个数字
+        if isinstance(info, (int, float)): 
+            if bars_since(d, int(info)) < 12: return True
+        # 新存档：字典
+        else:
+            ts = info.get("ts", 0)
+            p_cool = info.get("p", 0)
+            a_cool = info.get("a", 0)
+            if bars_since(d, ts) < DEDUP_BARS: return True
+            p_now = d.c.iloc[-1]
+            if a_cool > 0 and abs(p_now - p_cool) <= 1.5 * a_cool:
+                return True
     return False
 
 def mark(st,sym,tf,side,typ,ts,p,a,where="sent"):
@@ -261,6 +266,8 @@ def post_long(lines):
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
     def is_keep(info):
+        # 兼容老存档
+        if isinstance(info, (int, float)): return info >= c
         return info.get("ts", 0) >= c
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if is_keep(v)}
     st["cool"]={k:v for k,v in st.get("cool",{}).items() if is_keep(v)}
