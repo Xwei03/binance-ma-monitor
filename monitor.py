@@ -364,21 +364,16 @@ def prepare(d,tf,sym,st):
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: continue 
         if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: continue 
 
-        # 左侧动能衰竭（仅埋伏单生效）
+        # 左侧动能衰竭（仅埋伏单生效，防末尾接盘）
         cnt_dir = sum(1 for i in range(1,5) if (d.c.iloc[-1] > d.c.iloc[-1-i] if side=="LONG" else d.c.iloc[-1] < d.c.iloc[-1-i]))
         if cnt_dir >= 4: continue
-        if abs(p - d.c.iloc[-13]) / d.c.iloc[-13] > 2.5 * av / p: continue
 
         if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]):continue
         if (side=="LONG" and (p-e60.iloc[-1])<0.5*av) or (side=="SHORT" and (e60.iloc[-1]-p)<0.5*av):continue
         if vr>=2.0 or ar>1.6 or body>=.65:continue
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0):continue
         if (side=="LONG" and (p<e20.iloc[-1] or e20.iloc[-1]<e20.iloc[-6])) or (side=="SHORT" and (p>e20.iloc[-1] or e20.iloc[-1]>e20.iloc[-6])):continue
-        s=18 if ar<=1.0 else 14 if ar<=1.2 else 10 if ar<=1.5 else 6
-        s+=22 if d_e20<=(.005 if tf=="1H" else .015) else 18 if d_e20<=(.010 if tf=="1H" else .030) else 12 if d_e20<=(.020 if tf=="1H" else .060) else 4
-        s+=23+(14 if (.7<=vr<2.0 and vr3>=1.0) else 8 if (.6<=vr<2.0 and vr3>=0.9) else 4)
-        s+=8 if ((bs>0) if side=="LONG" else (bs<0)) else 4 if bs==0 else 0
-        s+=5 if (body<.35 and ar<=1) else 3 if body<.45 else 0
+        
         sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
         if risk / p > 0.025: continue 
@@ -394,6 +389,15 @@ def prepare(d,tf,sym,st):
                     tp=cd;break
         if tp is None:tp=p+(2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p-(2.0 if tf!="1H" else 2.2)*risk
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
+        
+        # 👇 【全新评分模型（100分制）】
+        s = 40 # 基础分（通过所有硬过滤）
+        if d_e20 <= 0.002: s += 30 # 极贴均线
+        elif d_e20 <= 0.005: s += 20
+        elif d_e20 <= 0.01: s += 10
+        
+        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15 # 大盘顺向
+        if cands and space > risk/p * 3.0: s += 15 # 空间极大
         
         if s>=need and rr_net>=need_rr:
             h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -424,10 +428,15 @@ def normal(d,tf,sym,st):
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
         if rr_net <= 0: return False
 
-        v=5 if vr>=5 else 15 if vr>=4 else 25 if vr>=2.5 else 30 if vr>=1.5 else 15 if vr>=1.0 else 5
-        if typ!="TREND":v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
-        s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
-        if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
+        # 👇 【全新评分模型（100分制）】
+        s = 40 # 基础分（通过所有硬过滤）
+        de20 = abs(p-e20)/p
+        if de20 <= 0.002: s += 30
+        elif de20 <= 0.005: s += 20
+        elif de20 <= 0.01: s += 10
+        
+        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
+        if rr_net >= 3.0: s += 15
         
         need = 68 if tf=="1H" else 66
         if typ=="BREAKOUT": need = 75 if tf=="1H" else 73
