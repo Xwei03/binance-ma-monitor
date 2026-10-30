@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.1 空间兜底版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.3 扣分项独立统计版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -451,8 +451,9 @@ def prepare(d,tf,sym,st):
         
         if 1.2 <= vr < 2.0: s += 5
         
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): s -= 15 
-        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): s -= 10 
+        deduct = []
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): s -= 15; deduct.append("扣分_逆大盘")
+        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): s -= 10; deduct.append("扣分_均线未金叉")
         
         is_heavy_trend = False
         if side == "LONG":
@@ -463,12 +464,12 @@ def prepare(d,tf,sym,st):
             if d.c.iloc[-1] < d.c.iloc[-2] < d.c.iloc[-3] < d.c.iloc[-4] < d.c.iloc[-5]:
                 if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*av for i in range(1,5)):
                     is_heavy_trend = True
-        if is_heavy_trend: s -= 10 
+        if is_heavy_trend: s -= 10; deduct.append("扣分_连涨跌4")
 
-        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): s -= 5 
+        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): s -= 5; deduct.append("扣分_收阴/阳")
         
         d_e20_pct=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
-        if d_e20_pct<0 or d_e20_pct>gap_max: s -= 5 
+        if d_e20_pct<0 or d_e20_pct>gap_max: s -= 5; deduct.append("扣分_偏离超限")
         
         reasons = []
         if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
@@ -481,7 +482,8 @@ def prepare(d,tf,sym,st):
             
         if rr_net < need_rr or s < need:
             if rr_net >= need_rr and s < need:
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["分数不足"],d,int(s))
+                reasons_merged = ["分数不足"] + deduct
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons_merged,d,int(s))
             continue
             
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -538,10 +540,11 @@ def normal(d,tf,sym,st):
         
         if vr >= 1.5: s += 5
         
+        deduct = []
         if typ != "BREAKOUT":
-            if 1.5*a < abs(e20-e60) <= 2.0*a: s -= 15
-            if abs(e20-e60) < 0.3*a: s -= 15
-        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": s -= 15
+            if 1.5*a < abs(e20-e60) <= 2.0*a: s -= 15; deduct.append("扣分_发散15")
+            if abs(e20-e60) < 0.3*a: s -= 15; deduct.append("扣分_粘合15")
+        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": s -= 15; deduct.append("扣分_恶劣15")
 
         s = min(s, 100)
         
@@ -561,7 +564,8 @@ def normal(d,tf,sym,st):
             return False
 
         if s < need:
-            rec_shadow(st,sym,tf,side,typ,p,sl,tp,["分数不足"],d,int(s))
+            reasons_merged = ["分数不足"] + deduct
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons_merged,d,int(s))
             return False
 
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -574,7 +578,6 @@ def normal(d,tf,sym,st):
     tr_rr=1.5
     bo_rr=1.8
 
-    # ======== 统一趋势单（不再区分轨道） ========
     # 做多趋势
     if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.5*a and d.c.iloc[-1] > d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
