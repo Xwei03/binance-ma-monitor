@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.7 真实RR过滤版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.9 影子单绝对提纯版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -401,6 +401,28 @@ def prepare(d,tf,sym,st):
     for side in ("LONG","SHORT"):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
         
+        sl=calc_sl_struct(d,tf,p,side,av)
+        risk=(p-sl) if side=="LONG" else (sl-p)
+        if risk<=0:continue
+        
+        # 1. 先算真实结构位 TP
+        cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
+        space = 0
+        if cands:
+            first_price = cands[0][0]
+            space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
+            for price,_ in cands:
+                cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
+                if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
+                    tp=cd;break
+        if tp is None:tp=p+need_rr*risk if side=="LONG" else p-need_rr*risk
+        
+        # 2. 算真实 RR，不达标直接滚蛋，连影子单的资格都没有
+        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
+        if rr_net < need_rr: 
+            continue
+            
+        # 3. 收集拦截理由
         reasons = []
         d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max: reasons.append("偏离超限")
@@ -423,63 +445,14 @@ def prepare(d,tf,sym,st):
         if vr>=2.0 or ar>1.6 or body>=.65: reasons.append("量能或实体异常")
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
         
+        if risk / p > 0.025: reasons.append("止损超上限")
+        
+        # 4. 有理由被拦，进影子单
         if reasons:
-            sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
-            if risk>0:
-                # === 新逻辑：查真实结构位算TP ===
-                cands_real = find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av)
-                real_tp = None
-                if cands_real:
-                    for price,_ in cands_real:
-                        cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
-                        if (side=="LONG" and cd>p) or (side=="SHORT" and cd<p):
-                            real_tp = cd
-                            break
-                if real_tp is None:
-                    real_tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
-                
-                rr_net = (((real_tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-real_tp)/p - 0.002) / ((sl-p)/p))
-                final_reasons = reasons
-                if rr_net < need_rr:
-                    final_reasons = ["空间不足"]
-                
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,real_tp,final_reasons,d,0)
+            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,0)
             continue
 
-        sl=calc_sl_struct(d,tf,p,side,av)
-        risk=(p-sl) if side=="LONG" else (sl-p)
-        if risk<=0:continue
-        
-        if risk / p > 0.025: 
-            # 止损超上限，同样算真实空间
-            cands_real = find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av)
-            real_tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
-            if cands_real:
-                for price,_ in cands_real:
-                    cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
-                    if (side=="LONG" and cd>p) or (side=="SHORT" and cd<p):
-                        real_tp = cd; break
-            rr_net = (((real_tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-real_tp)/p - 0.002) / ((sl-p)/p))
-            final_reasons = ["空间不足"] if rr_net < need_rr else ["止损超上限"]
-            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,real_tp,final_reasons,d,0)
-            continue
-
-        cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
-        space = 0
-        if cands:
-            first_price = cands[0][0]
-            space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
-            if space < risk/p * need_rr: 
-                tp_shadow = p + need_rr*risk if side=="LONG" else p - need_rr*risk
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp_shadow,["空间不足"],d,0)
-                continue
-            for price,_ in cands:
-                cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
-                if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
-                    tp=cd;break
-        if tp is None:tp=p+need_rr*risk if side=="LONG" else p-need_rr*risk
-        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        
+        # 5. 算分数，分数不够进影子单
         s = 40
         if d_e20 <= 0.002: s += 30
         elif d_e20 <= 0.005: s += 20
@@ -488,11 +461,16 @@ def prepare(d,tf,sym,st):
         if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
         if cands and space > risk/p * 3.0: s += 15
         
-        if s>=need and rr_net>=need_rr:
-            h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
-            if h4b:
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["h4_bias"],d,int(s));continue
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
+        if s < need:
+            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["分数不足"],d,int(s))
+            continue
+            
+        # 6. 都通过，发信号
+        h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
+        if h4b:
+            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["h4_bias"],d,int(s));continue
+            
+        out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr_net,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym,st):
@@ -505,10 +483,16 @@ def normal(d,tf,sym,st):
     h4_bias=h4_filter(sym)
     chase=CHASE_ATR.get(tf,2.5)
     out=[]
+    
     def add(side,typ,sl,tp,need_rr):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): return False
         if sl==p or tp==p: return False
         
+        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
+        # 第一步：连基本 RR 都不够，直接滚，连影子单资格都没有
+        if rr_net < need_rr: return False
+        
+        # 第二步：开始收集拦截理由
         reasons = []
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
         
@@ -519,23 +503,8 @@ def normal(d,tf,sym,st):
             
         if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
         
-        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        if rr_net < need_rr: reasons.append("净盈亏比不足")
-        
-        # === 趋势里如果被拦，同样查真实RR。 ===
         if reasons:
-            cands_real = find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",a)
-            real_tp = tp
-            if cands_real:
-                for price,_ in cands_real:
-                    cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
-                    if (side=="LONG" and cd>p) or (side=="SHORT" and cd<p):
-                        real_tp = cd; break
-            rr_net_real = (((real_tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-real_tp)/p - 0.002) / ((sl-p)/p))
-            final_reasons = reasons
-            if rr_net_real < need_rr:
-                final_reasons = ["空间不足"]
-            rec_shadow(st,sym,tf,side,typ,p,sl,real_tp,final_reasons,d,0)
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,0)
             return False
 
         s = 40
@@ -564,7 +533,7 @@ def normal(d,tf,sym,st):
     tr_rr=1.5
     bo_rr=1.8
 
-    # 轨道A (追击) - 偏离均线1.5 ATR以内
+    # 轨道A (追击)
     if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.5*a:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
@@ -590,7 +559,7 @@ def normal(d,tf,sym,st):
                         if price<p and (p-tp_c)/risk>=tr_rr:
                             if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
 
-    # 轨道B (回踩) - 离均线1.5 ATR以内
+    # 轨道B (回踩)
     if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and 0 <= (p-e20) <= 1.5*a and d.c.iloc[-1] > d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
@@ -603,8 +572,6 @@ def normal(d,tf,sym,st):
                         tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                         if price>p and (tp_c-p)/risk>=tr_rr:
                             if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
-                if not done and not any(x for x in st.get("shadow",[]) if x["sym"]==sym and "空间不足" in x.get("reasons",[]) and x["sent_ts"]==d.ts.iloc[-1]): 
-                    rec_shadow(st,sym,tf,"LONG","TREND",p,sl_c,p+tr_rr*risk,["空间不足"],d,0)
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and 0 <= (e20-p) <= 1.5*a and d.c.iloc[-1] < d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
@@ -617,8 +584,6 @@ def normal(d,tf,sym,st):
                         tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
                         if price<p and (p-tp_c)/risk>=tr_rr:
                             if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
-                if not done and not any(x for x in st.get("shadow",[]) if x["sym"]==sym and "空间不足" in x.get("reasons",[]) and x["sent_ts"]==d.ts.iloc[-1]): 
-                    rec_shadow(st,sym,tf,"SHORT","TREND",p,sl_c,p-tr_rr*risk,["空间不足"],d,0)
 
     hi,lo,real_body=d.h.iloc[-12:-2].max(),d.l.iloc[-12:-2].min(),abs(p-d.o.iloc[-1])
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase*a and 1.5<=vr<8.0 and (d.h.iloc[-1]-max(p,d.o.iloc[-1]))<max(real_body,a*0.01)*0.5:
