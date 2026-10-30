@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.6 砍掉埋伏均线粘合版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.7 真实RR过滤版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -199,10 +199,8 @@ def is_cooling(st,sym,tf,side,typ,d):
     for pool in ["cool", "sent"]:
         info = st.get(pool,{}).get(key)
         if not info: continue
-        # 兼容老存档：如果是个数字
         if isinstance(info, (int, float)): 
             if bars_since(d, int(info)) < 12: return True
-        # 新存档：字典
         else:
             ts = info.get("ts", 0)
             p_cool = info.get("p", 0)
@@ -266,7 +264,6 @@ def post_long(lines):
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
     def is_keep(info):
-        # 兼容老存档
         if isinstance(info, (int, float)): return info >= c
         return info.get("ts", 0) >= c
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if is_keep(v)}
@@ -410,7 +407,6 @@ def prepare(d,tf,sym,st):
         
         if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
-        # 彻底删除了均线粘合拦截
         
         is_heavy_trend = False
         if side == "LONG":
@@ -430,8 +426,24 @@ def prepare(d,tf,sym,st):
         if reasons:
             sl=calc_sl_struct(d,tf,p,side,av); risk=(p-sl) if side=="LONG" else (sl-p)
             if risk>0:
-                tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,0)
+                # === 新逻辑：查真实结构位算TP ===
+                cands_real = find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av)
+                real_tp = None
+                if cands_real:
+                    for price,_ in cands_real:
+                        cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
+                        if (side=="LONG" and cd>p) or (side=="SHORT" and cd<p):
+                            real_tp = cd
+                            break
+                if real_tp is None:
+                    real_tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
+                
+                rr_net = (((real_tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-real_tp)/p - 0.002) / ((sl-p)/p))
+                final_reasons = reasons
+                if rr_net < need_rr:
+                    final_reasons = ["空间不足"]
+                
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,real_tp,final_reasons,d,0)
             continue
 
         sl=calc_sl_struct(d,tf,p,side,av)
@@ -439,8 +451,17 @@ def prepare(d,tf,sym,st):
         if risk<=0:continue
         
         if risk / p > 0.025: 
-            tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
-            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["止损超上限"],d,0)
+            # 止损超上限，同样算真实空间
+            cands_real = find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av)
+            real_tp = p + need_rr*risk if side=="LONG" else p - need_rr*risk
+            if cands_real:
+                for price,_ in cands_real:
+                    cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
+                    if (side=="LONG" and cd>p) or (side=="SHORT" and cd<p):
+                        real_tp = cd; break
+            rr_net = (((real_tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-real_tp)/p - 0.002) / ((sl-p)/p))
+            final_reasons = ["空间不足"] if rr_net < need_rr else ["止损超上限"]
+            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,real_tp,final_reasons,d,0)
             continue
 
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
@@ -494,14 +515,27 @@ def normal(d,tf,sym,st):
         if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
         if typ != "BREAKOUT":
             if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
-            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合") # 趋势的没有改，依然保持0.3
+            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
             
         if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
         
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
         if rr_net < need_rr: reasons.append("净盈亏比不足")
+        
+        # === 趋势里如果被拦，同样查真实RR。 ===
         if reasons:
-            rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,0)
+            cands_real = find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",a)
+            real_tp = tp
+            if cands_real:
+                for price,_ in cands_real:
+                    cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
+                    if (side=="LONG" and cd>p) or (side=="SHORT" and cd<p):
+                        real_tp = cd; break
+            rr_net_real = (((real_tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-real_tp)/p - 0.002) / ((sl-p)/p))
+            final_reasons = reasons
+            if rr_net_real < need_rr:
+                final_reasons = ["空间不足"]
+            rec_shadow(st,sym,tf,side,typ,p,sl,real_tp,final_reasons,d,0)
             return False
 
         s = 40
