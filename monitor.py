@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V8.2 混合判罚版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V8.7 纯净影子单版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -307,7 +307,7 @@ def daily_report(st):
     L.append(f"统计时间：{now_bj().strftime('%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（多标签汇总+明细）")
+        L.append(f"\n👻 影子单（多标签汇总）")
         for tf in ("1H","1D"):
             for typ in ("PREPARE","TREND","BREAKOUT"):
                 sub=[r for r in sh if r.get("tf")==tf and r.get("type")==typ]
@@ -324,22 +324,8 @@ def daily_report(st):
                     w,l,be=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS"),sum(1 for r in sb if r["result"]=="BE")
                     mfes=[r["mfe"] for r in sb if "mfe" in r]; ma=sum(mfes)/len(mfes) if mfes else 0
                     L.append(f"    被拦[{k}]：盈{w} 保{be} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%")
-                    
-                L.append(f"    明细：")
-                for r in sub:
-                    sym_s = r["sym"].replace("-USDT-SWAP","")
-                    reasons_str = "+".join(r.get("reasons") or [])
-                    t_open = fmt_time(r.get("alert_ts") or r.get("sig_ts"))
-                    t_close = fmt_time(r.get("rec_ts"))
-                    close_tag = f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
-                    L.append(f"      {sym_s} {DIR.get(r.get('dir',''),'?')} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} 被拦[{reasons_str}] 结:{r['result']} MFE={r['mfe']}% 开:{t_open} {close_tag}")
 
         sh_live=[x for x in st.get("shadow",[])]
-        if sh_live:
-            L.append(f"\n👻 影子在跟明细（{len(sh_live)}条）：")
-            for s in sh_live:
-                reasons_str = "+".join(s.get('reasons',[]))
-                L.append(f"  {s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]} {DIR[s['dir']]} 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g} 被拦[{reasons_str}]")
         L.append(f"  影子在跟：{len(sh_live)}/{MAX_SHADOW} 条")
         L.append(f"  口径：影子单 sl/tp 按真实逻辑算，跟到止盈/止损/超时")
 
@@ -409,17 +395,22 @@ def prepare(d,tf,sym,st):
     need_rr = 1.5
 
     for side in ("LONG","SHORT"):
-        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
-        
         sl=calc_sl_struct(d,tf,p,side,av)
         risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
+        
+        # === 修复：止损超上限直接死，不进影子单 ===
+        if risk / p > 0.025: 
+            continue
+        # =======================================
         
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
         space = 0
         if cands:
             first_price = cands[0][0]
             space = (first_price - p)/p if side=="LONG" else (p - first_price)/p
+            if space < risk/p * need_rr: 
+                continue
             for price,_ in cands:
                 cd=price*(0.97 if tf=="1D" else 0.985) if side=="LONG" else price*(1.03 if tf=="1D" else 1.015)
                 if (side=="LONG" and cd>p and (cd-p)/risk>=need_rr) or (side=="SHORT" and cd<p and (p-cd)/risk>=need_rr):
@@ -462,11 +453,8 @@ def prepare(d,tf,sym,st):
         
         if 1.2 <= vr < 2.0: s += 5
         
-        # ==========================================
-        # 扣分制：允许犯错，拿分数赎罪
-        # ==========================================
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): s -= 15 # 逆大盘
-        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): s -= 10 # 均线排列错误
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): s -= 15 
+        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): s -= 10 
         
         is_heavy_trend = False
         if side == "LONG":
@@ -477,29 +465,25 @@ def prepare(d,tf,sym,st):
             if d.c.iloc[-1] < d.c.iloc[-2] < d.c.iloc[-3] < d.c.iloc[-4] < d.c.iloc[-5]:
                 if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*av for i in range(1,5)):
                     is_heavy_trend = True
-        if is_heavy_trend: s -= 10 # 左侧连涨跌超4
+        if is_heavy_trend: s -= 10 
 
-        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): s -= 5 # 方向不符(收阴/阳)
+        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): s -= 5 
         
         d_e20_pct=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
-        if d_e20_pct<0 or d_e20_pct>gap_max: s -= 5 # 偏离超限
+        if d_e20_pct<0 or d_e20_pct>gap_max: s -= 5 
         
-        # ==========================================
-        # 死刑保留：真能要命的，绝不姑息
-        # ==========================================
         reasons = []
         if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
         if vr>=2.0 or ar>1.6 or body>=.65: reasons.append("量能或实体异常")
-        if risk / p > 0.025: reasons.append("止损超上限")
         
-        # 如果触发了死刑，直接进影子单，不管分多高
         if reasons:
             rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,int(s))
             continue
             
-        # 如果分被扣得不及格了，直接消失
         if rr_net < need_rr or s < need:
+            if rr_net >= need_rr and s < need:
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["分数不足"],d,int(s))
             continue
             
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -521,8 +505,10 @@ def normal(d,tf,sym,st):
     out=[]
     
     def add(side,typ,sl,tp,need_rr):
-        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): return False
-        if sl==p or tp==p: return False
+        # === 修复：止损超上限直接死 ===
+        if abs(p-sl)/p > 0.025: 
+            return False
+        # ==========================
         
         de20_atr = abs(p-e20)/a
         
@@ -564,16 +550,17 @@ def normal(d,tf,sym,st):
             need = 66 if tf=="1H" else 64
         
         if rr_net < need_rr or s < need:
+            if rr_net >= need_rr and s < need:
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["分数不足"],d,int(s))
             return False
             
-        # 趋势和突破：保持一票否决（绝不妥协）
         reasons = []
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
         if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
         if typ != "BREAKOUT":
             if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
             if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
-        if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
+        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): reasons.append("方向不符")
         
         if reasons:
             rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s))
