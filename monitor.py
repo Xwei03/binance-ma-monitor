@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V8.7 纯净影子单版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.0 终极合一版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -391,7 +391,7 @@ def prepare(d,tf,sym,st):
     out=[]
     gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
     
-    need = 68 if tf=="1H" else 66
+    need = 64 if tf=="1H" else 62
     need_rr = 1.5
 
     for side in ("LONG","SHORT"):
@@ -399,10 +399,8 @@ def prepare(d,tf,sym,st):
         risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
         
-        # === 修复：止损超上限直接死，不进影子单 ===
         if risk / p > 0.025: 
             continue
-        # =======================================
         
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
         space = 0
@@ -505,10 +503,8 @@ def normal(d,tf,sym,st):
     out=[]
     
     def add(side,typ,sl,tp,need_rr):
-        # === 修复：止损超上限直接死 ===
-        if abs(p-sl)/p > 0.025: 
-            return False
-        # ==========================
+        if abs(p-sl)/p > 0.025: return False
+        if abs(e20-e60) > 2.0 * a: return False
         
         de20_atr = abs(p-e20)/a
         
@@ -542,28 +538,41 @@ def normal(d,tf,sym,st):
         
         if vr >= 1.5: s += 5
         
+        if typ != "BREAKOUT":
+            if 1.5*a < abs(e20-e60) <= 2.0*a: s -= 15
+            if abs(e20-e60) < 0.3*a: s -= 15
+        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": s -= 15
+
         s = min(s, 100)
         
         if typ == "BREAKOUT":
-            need = 62 if tf=="1H" else 60
+            need = 60 if tf=="1H" else 58
         else:
-            need = 66 if tf=="1H" else 64
+            need = 62 if tf=="1H" else 60
         
-        if rr_net < need_rr or s < need:
-            if rr_net >= need_rr and s < need:
-                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["分数不足"],d,int(s))
-            return False
-            
+        if rr_net < need_rr: return False
+        
         reasons = []
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
-        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
-        if typ != "BREAKOUT":
-            if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
-            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): reasons.append("方向不符")
         
+        is_heavy_trend = False
+        if side == "LONG":
+            if d.c.iloc[-1] > d.c.iloc[-2] > d.c.iloc[-3] > d.c.iloc[-4] > d.c.iloc[-5]:
+                if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*a for i in range(1,5)):
+                    is_heavy_trend = True
+        else:
+            if d.c.iloc[-1] < d.c.iloc[-2] < d.c.iloc[-3] < d.c.iloc[-4] < d.c.iloc[-5]:
+                if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*a for i in range(1,5)):
+                    is_heavy_trend = True
+        if is_heavy_trend: reasons.append("左侧连涨跌超4")
+
         if reasons:
             rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s))
+            return False
+
+        if s < need:
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,["分数不足"],d,int(s))
             return False
 
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -576,58 +585,36 @@ def normal(d,tf,sym,st):
     tr_rr=1.5
     bo_rr=1.8
 
-    # 轨道A (追击)
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.5*a:
+    # ======== 统一趋势单（不再区分轨道） ========
+    # 做多趋势
+    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.5*a and d.c.iloc[-1] > d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
         if risk>0:
-            cands=find_swing_levels(d,tf,p,"res",a);done=False
+            cands=find_swing_levels(d,tf,p,"res",a)
             if cands:
                 first_price = cands[0][0]
                 if (first_price - p)/p >= risk/p * tr_rr:
                     for price,_ in cands:
                         tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
                         if price>p and (tp_c-p)/risk>=tr_rr:
-                            if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.5*a:
+                            if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="趋势"; break
+                            
+    # 做空趋势
+    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.5*a and d.c.iloc[-1] < d.o.iloc[-1]:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
         if risk>0:
-            cands=find_swing_levels(d,tf,p,"sup",a);done=False
+            cands=find_swing_levels(d,tf,p,"sup",a)
             if cands:
                 first_price = cands[0][0]
                 if (p - first_price)/p >= risk/p * tr_rr:
                     for price,_ in cands:
                         tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
                         if price<p and (p-tp_c)/risk>=tr_rr:
-                            if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="A"; done=True; break
+                            if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="趋势"; break
 
-    # 轨道B (回踩)
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and 0 <= (p-e20) <= 1.5*a and d.c.iloc[-1] > d.o.iloc[-1]:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a)
-        risk=p-sl_c
-        if risk>0:
-            cands=find_swing_levels(d,tf,p,"res",a);done=False
-            if cands:
-                first_price = cands[0][0]
-                if (first_price - p)/p >= risk/p * tr_rr:
-                    for price,_ in cands:
-                        tp_c=min(price*(0.97 if tf=="1D" else 0.985),p+5*a)
-                        if price>p and (tp_c-p)/risk>=tr_rr:
-                            if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and 0 <= (e20-p) <= 1.5*a and d.c.iloc[-1] < d.o.iloc[-1]:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
-        risk=sl_c-p
-        if risk>0:
-            cands=find_swing_levels(d,tf,p,"sup",a);done=False
-            if cands:
-                first_price = cands[0][0]
-                if (p - first_price)/p >= risk/p * tr_rr:
-                    for price,_ in cands:
-                        tp_c=max(price*(1.03 if tf=="1D" else 1.015),p-5*a)
-                        if price<p and (p-tp_c)/risk>=tr_rr:
-                            if add("SHORT","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="B"; done=True; break
-
+    # 突破单
     hi,lo,real_body=d.h.iloc[-12:-2].max(),d.l.iloc[-12:-2].min(),abs(p-d.o.iloc[-1])
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase*a and 1.5<=vr<8.0 and (d.h.iloc[-1]-max(p,d.o.iloc[-1]))<max(real_body,a*0.01)*0.5:
         sl_c=hi-0.2*a;risk=p-sl_c
