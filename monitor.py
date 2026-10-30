@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.9 影子单绝对提纯版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V7.0 实单被拦才进影子单
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -401,11 +401,11 @@ def prepare(d,tf,sym,st):
     for side in ("LONG","SHORT"):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
         
+        # 1. 先算真实结构位 TP 和 RR
         sl=calc_sl_struct(d,tf,p,side,av)
         risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
         
-        # 1. 先算真实结构位 TP
         cands=find_swing_levels(d,tf,p,"res" if side=="LONG" else "sup",av); tp=None
         space = 0
         if cands:
@@ -417,16 +417,26 @@ def prepare(d,tf,sym,st):
                     tp=cd;break
         if tp is None:tp=p+need_rr*risk if side=="LONG" else p-need_rr*risk
         
-        # 2. 算真实 RR，不达标直接滚蛋，连影子单的资格都没有
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        if rr_net < need_rr: 
+        
+        # 2. 算分数
+        s = 40
+        d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
+        if d_e20 <= 0.002: s += 30
+        elif d_e20 <= 0.005: s += 20
+        elif d_e20 <= 0.01: s += 10
+        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
+        if cands and space > risk/p * 3.0: s += 15
+
+        # =========================================================
+        # 核心逻辑：先查资格！分数不够、RR不够，连进影子单的资格都没有
+        # =========================================================
+        if rr_net < need_rr or s < need:
             continue
             
-        # 3. 收集拦截理由
+        # 3. 有资格了，再查保安（拦截理由）
         reasons = []
-        d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
         if d_e20<0 or d_e20>gap_max: reasons.append("偏离超限")
-        
         if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
         
@@ -447,25 +457,12 @@ def prepare(d,tf,sym,st):
         
         if risk / p > 0.025: reasons.append("止损超上限")
         
-        # 4. 有理由被拦，进影子单
+        # 4. 如果被保安拦下，进影子单
         if reasons:
-            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,0)
-            continue
-
-        # 5. 算分数，分数不够进影子单
-        s = 40
-        if d_e20 <= 0.002: s += 30
-        elif d_e20 <= 0.005: s += 20
-        elif d_e20 <= 0.01: s += 10
-        
-        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
-        if cands and space > risk/p * 3.0: s += 15
-        
-        if s < need:
-            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["分数不足"],d,int(s))
+            rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,int(s))
             continue
             
-        # 6. 都通过，发信号
+        # 5. 没被保安拦，且资格足够，发实单
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
         if h4b:
             rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["h4_bias"],d,int(s));continue
@@ -488,41 +485,41 @@ def normal(d,tf,sym,st):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): return False
         if sl==p or tp==p: return False
         
-        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        # 第一步：连基本 RR 都不够，直接滚，连影子单资格都没有
-        if rr_net < need_rr: return False
-        
-        # 第二步：开始收集拦截理由
-        reasons = []
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
-        
-        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
-        if typ != "BREAKOUT":
-            if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
-            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
-            
-        if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
-        
-        if reasons:
-            rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,0)
-            return False
-
+        # 1. 算分数和RR
         s = 40
         de20 = abs(p-e20)/p
         if de20 <= 0.002: s += 30
         elif de20 <= 0.005: s += 20
         elif de20 <= 0.01: s += 10
-        
         if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
+        
+        rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
         if rr_net >= 3.0: s += 15
         
         need = 68 if tf=="1H" else 66
         if typ=="BREAKOUT": need = 75 if tf=="1H" else 73
         
-        if s < need:
-            rec_shadow(st,sym,tf,side,typ,p,sl,tp,["分数不足"],d,s)
+        # =========================================================
+        # 核心逻辑：先查资格！分数不够、RR不够，连进影子单的资格都没有
+        # =========================================================
+        if rr_net < need_rr or s < need:
+            return False
+        
+        # 2. 有资格了，再查保安（拦截理由）
+        reasons = []
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
+        if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
+        if typ != "BREAKOUT":
+            if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
+            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
+        if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
+        
+        # 3. 被保安拦下，进影子单
+        if reasons:
+            rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s))
             return False
 
+        # 4. 没被拦，发实单
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
         if h4b:
             rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,s);return False
