@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V7.0 实单被拦才进影子单
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V8.1 完美及格线版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -251,7 +251,7 @@ def post(txt):
 def post_long(lines):
     batches=[];cur=[];cur_len=0
     for line in lines:
-        if cur_len+len(line)+1>1500 and cur:batches.append(cur);cur=[];cur_len=0
+        if cur_len+len(line)+1>2000 and cur:batches.append(cur);cur=[];cur_len=0
         cur.append(line);cur_len+=len(line)+1
     if cur:batches.append(cur)
     total=len(batches);ok=True
@@ -307,29 +307,39 @@ def daily_report(st):
     L.append(f"统计时间：{now_bj().strftime('%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（按主理由分组，附加理由算次数）")
+        L.append(f"\n👻 影子单（多标签汇总+明细）")
         for tf in ("1H","1D"):
             for typ in ("PREPARE","TREND","BREAKOUT"):
                 sub=[r for r in sh if r.get("tf")==tf and r.get("type")==typ]
                 if not sub:continue
                 L.append(f"  【{tf} {TYP[typ]}】")
+                
                 groups={}
-                extra_count={}
                 for r in sub:
                     reasons = r.get("reasons") or ["?"]
-                    main = reasons[0]
-                    groups.setdefault(main,[]).append(r)
-                    for extra in reasons[1:]:
-                        extra_count[extra] = extra_count.get(extra,0)+1
+                    for reason in reasons: 
+                        groups.setdefault(reason,[]).append(r)
+                
                 for k,sb in sorted(groups.items()):
                     w,l,be=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS"),sum(1 for r in sb if r["result"]=="BE")
                     mfes=[r["mfe"] for r in sb if "mfe" in r]; ma=sum(mfes)/len(mfes) if mfes else 0
                     L.append(f"    被拦[{k}]：盈{w} 保{be} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%")
-                if extra_count:
-                    extras = "，".join(f"{k}出现{v}次" for k,v in sorted(extra_count.items(), key=lambda x:-x[1]))
-                    L.append(f"    附加理由：{extras}")
+                    
+                L.append(f"    明细：")
+                for r in sub:
+                    sym_s = r["sym"].replace("-USDT-SWAP","")
+                    reasons_str = "+".join(r.get("reasons") or [])
+                    t_open = fmt_time(r.get("alert_ts") or r.get("sig_ts"))
+                    t_close = fmt_time(r.get("rec_ts"))
+                    close_tag = f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
+                    L.append(f"      {sym_s} {DIR.get(r.get('dir',''),'?')} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} 被拦[{reasons_str}] 结:{r['result']} MFE={r['mfe']}% 开:{t_open} {close_tag}")
 
         sh_live=[x for x in st.get("shadow",[])]
+        if sh_live:
+            L.append(f"\n👻 影子在跟明细（{len(sh_live)}条）：")
+            for s in sh_live:
+                reasons_str = "+".join(s.get('reasons',[]))
+                L.append(f"  {s['sym'].replace('-USDT-SWAP','')} {s['tf']}{TYP[s['type']]} {DIR[s['dir']]} 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g} 被拦[{reasons_str}]")
         L.append(f"  影子在跟：{len(sh_live)}/{MAX_SHADOW} 条")
         L.append(f"  口径：影子单 sl/tp 按真实逻辑算，跟到止盈/止损/超时")
 
@@ -395,13 +405,13 @@ def prepare(d,tf,sym,st):
     out=[]
     gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
     
-    need = 70 if tf=="1H" else 68
+    # 用户定制的及格线
+    need = 68 if tf=="1H" else 66
     need_rr = 1.5
 
     for side in ("LONG","SHORT"):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]):continue
         
-        # 1. 先算真实结构位 TP 和 RR
         sl=calc_sl_struct(d,tf,p,side,av)
         risk=(p-sl) if side=="LONG" else (sl-p)
         if risk<=0:continue
@@ -419,24 +429,49 @@ def prepare(d,tf,sym,st):
         
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
         
-        # 2. 算分数
-        s = 40
-        d_e20=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
-        if d_e20 <= 0.002: s += 30
-        elif d_e20 <= 0.005: s += 20
-        elif d_e20 <= 0.01: s += 10
-        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
-        if cands and space > risk/p * 3.0: s += 15
+        s = 20
+        d_e20_atr = (p - e20.iloc[-1]) / av if side=="LONG" else (e20.iloc[-1] - p) / av
+        if d_e20_atr < 0: d_e20_atr = 999
+        
+        if tf == "1H":
+            if d_e20_atr <= 0.2: s += 25
+            elif d_e20_atr <= 0.5: s += 20
+            elif d_e20_atr <= 1.0: s += 15
+            elif d_e20_atr <= 1.5: s += 5
+        else:
+            if d_e20_atr <= 0.5: s += 25
+            elif d_e20_atr <= 1.0: s += 20
+            elif d_e20_atr <= 2.0: s += 15
+            elif d_e20_atr <= 3.0: s += 5
+            
+        if rr_net >= 3.0: s += 25
+        elif rr_net >= 2.5: s += 20
+        elif rr_net >= 2.0: s += 15
+        elif rr_net >= 1.5: s += 5
+        
+        if bs == 0: s += 10
+        elif (bs > 0 and side=="LONG") or (bs < 0 and side=="SHORT"): s += 15
+        
+        shadow_long = min(d.o.iloc[-1], p) - d.l.iloc[-1]
+        shadow_short = d.h.iloc[-1] - max(d.o.iloc[-1], p)
+        body_size = abs(p - d.o.iloc[-1])
+        
+        if side=="LONG" and shadow_long > 2*body_size and shadow_long > 0.5*av: s += 10
+        if side=="SHORT" and shadow_short > 2*body_size and shadow_short > 0.5*av: s += 10
+        
+        if body_size < 0.2*av and vr < 0.8: s += 5
+        
+        if 1.2 <= vr < 2.0: s += 5
 
-        # =========================================================
-        # 核心逻辑：先查资格！分数不够、RR不够，连进影子单的资格都没有
-        # =========================================================
+        s = min(s, 100)
+
         if rr_net < need_rr or s < need:
             continue
             
-        # 3. 有资格了，再查保安（拦截理由）
         reasons = []
-        if d_e20<0 or d_e20>gap_max: reasons.append("偏离超限")
+        d_e20_pct=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
+        if d_e20_pct<0 or d_e20_pct>gap_max: reasons.append("偏离超限")
+        
         if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
         
@@ -457,12 +492,10 @@ def prepare(d,tf,sym,st):
         
         if risk / p > 0.025: reasons.append("止损超上限")
         
-        # 4. 如果被保安拦下，进影子单
         if reasons:
             rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,int(s))
             continue
             
-        # 5. 没被保安拦，且资格足够，发实单
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
         if h4b:
             rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["h4_bias"],d,int(s));continue
@@ -485,27 +518,49 @@ def normal(d,tf,sym,st):
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): return False
         if sl==p or tp==p: return False
         
-        # 1. 算分数和RR
-        s = 40
-        de20 = abs(p-e20)/p
-        if de20 <= 0.002: s += 30
-        elif de20 <= 0.005: s += 20
-        elif de20 <= 0.01: s += 10
-        if bs > 0 and side=="LONG" or bs < 0 and side=="SHORT": s += 15
+        de20_atr = abs(p-e20)/a
         
+        s = 20
+        if tf == "1H":
+            if de20_atr <= 0.2: s += 25
+            elif de20_atr <= 0.5: s += 20
+            elif de20_atr <= 1.0: s += 15
+            elif de20_atr <= 1.5: s += 5
+        else:
+            if de20_atr <= 0.5: s += 25
+            elif de20_atr <= 1.0: s += 20
+            elif de20_atr <= 2.0: s += 15
+            elif de20_atr <= 3.0: s += 5
+            
         rr_net = (((tp-p)/p - 0.002) / ((p-sl)/p)) if side=="LONG" else (((p-tp)/p - 0.002) / ((sl-p)/p))
-        if rr_net >= 3.0: s += 15
+        if rr_net >= 3.0: s += 25
+        elif rr_net >= 2.5: s += 20
+        elif rr_net >= 2.0: s += 15
+        elif rr_net >= 1.5: s += 5
         
-        need = 68 if tf=="1H" else 66
-        if typ=="BREAKOUT": need = 75 if tf=="1H" else 73
+        if bs == 0: s += 10
+        elif (bs > 0 and side=="LONG") or (bs < 0 and side=="SHORT"): s += 15
         
-        # =========================================================
-        # 核心逻辑：先查资格！分数不够、RR不够，连进影子单的资格都没有
-        # =========================================================
+        shadow_long = min(d.o.iloc[-1], p) - d.l.iloc[-1]
+        shadow_short = d.h.iloc[-1] - max(d.o.iloc[-1], p)
+        body_size = abs(p - d.o.iloc[-1])
+        
+        if side=="LONG" and shadow_long > 2*body_size and shadow_long > 0.5*a: s += 10
+        if side=="SHORT" and shadow_short > 2*body_size and shadow_short > 0.5*a: s += 10
+        
+        if vr >= 1.5: s += 5
+        
+        s = min(s, 100)
+        
+        # 用户定制的趋势/突破及格线
+        if typ == "BREAKOUT":
+            need = 62 if tf=="1H" else 60
+        else:
+            need = 66 if tf=="1H" else 64
+        
         if rr_net < need_rr or s < need:
             return False
         
-        # 2. 有资格了，再查保安（拦截理由）
         reasons = []
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
         if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
@@ -514,12 +569,10 @@ def normal(d,tf,sym,st):
             if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
         if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
         
-        # 3. 被保安拦下，进影子单
         if reasons:
             rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s))
             return False
 
-        # 4. 没被拦，发实单
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
         if h4b:
             rec_shadow(st,sym,tf,side,typ,p,sl,tp,["h4_bias"],d,s);return False
