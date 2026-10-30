@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V8.1 完美及格线版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V8.2 混合判罚版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -405,7 +405,6 @@ def prepare(d,tf,sym,st):
     out=[]
     gap_max=min(PREPARE_GAP_ATR*av/p,PREPARE_GAP_CAP.get(tf,0.02))
     
-    # 用户定制的及格线
     need = 68 if tf=="1H" else 66
     need_rr = 1.5
 
@@ -462,18 +461,12 @@ def prepare(d,tf,sym,st):
         if body_size < 0.2*av and vr < 0.8: s += 5
         
         if 1.2 <= vr < 2.0: s += 5
-
-        s = min(s, 100)
-
-        if rr_net < need_rr or s < need:
-            continue
-            
-        reasons = []
-        d_e20_pct=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
-        if d_e20_pct<0 or d_e20_pct>gap_max: reasons.append("偏离超限")
         
-        if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
-        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
+        # ==========================================
+        # 扣分制：允许犯错，拿分数赎罪
+        # ==========================================
+        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): s -= 15 # 逆大盘
+        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): s -= 10 # 均线排列错误
         
         is_heavy_trend = False
         if side == "LONG":
@@ -484,16 +477,29 @@ def prepare(d,tf,sym,st):
             if d.c.iloc[-1] < d.c.iloc[-2] < d.c.iloc[-3] < d.c.iloc[-4] < d.c.iloc[-5]:
                 if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*av for i in range(1,5)):
                     is_heavy_trend = True
-        if is_heavy_trend: reasons.append("左侧连涨跌超4")
+        if is_heavy_trend: s -= 10 # 左侧连涨跌超4
 
-        if (side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]) or (side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]): reasons.append("均线排列错误")
-        if vr>=2.0 or ar>1.6 or body>=.65: reasons.append("量能或实体异常")
-        if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
+        if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): s -= 5 # 方向不符(收阴/阳)
         
+        d_e20_pct=(p-e20.iloc[-1])/p if side=="LONG" else (e20.iloc[-1]-p)/p
+        if d_e20_pct<0 or d_e20_pct>gap_max: s -= 5 # 偏离超限
+        
+        # ==========================================
+        # 死刑保留：真能要命的，绝不姑息
+        # ==========================================
+        reasons = []
+        if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
+        if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
+        if vr>=2.0 or ar>1.6 or body>=.65: reasons.append("量能或实体异常")
         if risk / p > 0.025: reasons.append("止损超上限")
         
+        # 如果触发了死刑，直接进影子单，不管分多高
         if reasons:
             rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,reasons,d,int(s))
+            continue
+            
+        # 如果分被扣得不及格了，直接消失
+        if rr_net < need_rr or s < need:
             continue
             
         h4b=(side=="LONG" and h4_bias==-1) or (side=="SHORT" and h4_bias==1)
@@ -552,7 +558,6 @@ def normal(d,tf,sym,st):
         
         s = min(s, 100)
         
-        # 用户定制的趋势/突破及格线
         if typ == "BREAKOUT":
             need = 62 if tf=="1H" else 60
         else:
@@ -560,7 +565,8 @@ def normal(d,tf,sym,st):
         
         if rr_net < need_rr or s < need:
             return False
-        
+            
+        # 趋势和突破：保持一票否决（绝不妥协）
         reasons = []
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
         if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
