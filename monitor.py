@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.0 终极合一版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.1 空间兜底版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -556,17 +556,6 @@ def normal(d,tf,sym,st):
         if (side=="LONG" and bs<0) or (side=="SHORT" and bs>0): reasons.append("逆大盘")
         if (side=="LONG" and p<=d.o.iloc[-1]) or (side=="SHORT" and p>=d.o.iloc[-1]): reasons.append("方向不符")
         
-        is_heavy_trend = False
-        if side == "LONG":
-            if d.c.iloc[-1] > d.c.iloc[-2] > d.c.iloc[-3] > d.c.iloc[-4] > d.c.iloc[-5]:
-                if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*a for i in range(1,5)):
-                    is_heavy_trend = True
-        else:
-            if d.c.iloc[-1] < d.c.iloc[-2] < d.c.iloc[-3] < d.c.iloc[-4] < d.c.iloc[-5]:
-                if all(abs(d.c.iloc[-i] - d.o.iloc[-i]) > 0.5*a for i in range(1,5)):
-                    is_heavy_trend = True
-        if is_heavy_trend: reasons.append("左侧连涨跌超4")
-
         if reasons:
             rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,int(s))
             return False
