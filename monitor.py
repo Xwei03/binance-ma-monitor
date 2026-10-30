@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.4 兼容老存档版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V6.6 砍掉埋伏均线粘合版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -410,7 +410,7 @@ def prepare(d,tf,sym,st):
         
         if abs(p - d.o.iloc[-1]) / av > 1.5: reasons.append("恶劣形态")
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.5*av: reasons.append("均线发散")
-        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.3*av: reasons.append("均线粘合")
+        # 彻底删除了均线粘合拦截
         
         is_heavy_trend = False
         if side == "LONG":
@@ -494,7 +494,7 @@ def normal(d,tf,sym,st):
         if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": reasons.append("恶劣形态")
         if typ != "BREAKOUT":
             if abs(e20-e60) > 1.5*a: reasons.append("均线发散")
-            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合")
+            if abs(e20-e60) < 0.3*a: reasons.append("均线粘合") # 趋势的没有改，依然保持0.3
             
         if abs(p-sl)/p > 0.025: reasons.append("止损超上限")
         
