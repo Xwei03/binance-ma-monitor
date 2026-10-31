@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（防美股干扰版）
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（带影子单明细）
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -40,6 +40,7 @@ MIN_VOL=10000000
 CN={"1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
+MAX_SHADOW=50
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
@@ -84,7 +85,6 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    # 修复：加回 instCategory == "1"
     live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live" and x.get("instCategory")=="1"}
     vol={}
     for x in b:
@@ -208,7 +208,7 @@ def bars_since(d,ts):return max(int(len(d[d.ts>=ts]))-1,0)
 def load_state():
     try:
         with open(STATE,encoding="utf8") as f:return json.load(f)
-    except:return {"sent":{},"cool":{},"live":[],"results":[],"last_report":""}
+    except:return {"sent":{},"cool":{},"live":[],"results":[],"shadow":[],"shadow_cool":{},"last_report":""}
 
 def save_state(st):
     with open(STATE+".tmp","w",encoding="utf8") as f:json.dump(st,f,ensure_ascii=False)
@@ -236,6 +236,21 @@ def rec(st,s,r,mfe=None,mfe_pct=None):
     if mfe is not None:e["mfe"]=round(float(mfe)*100,2)
     if mfe_pct is not None:e["mfe_pct"]=round(min(float(mfe_pct),1.0)*100,1)
     st.setdefault("results",[]).append(e)
+
+def rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,score):
+    if any(lv.get("sym")==sym and lv.get("tf")==tf for lv in st.get("live",[])):return
+    if len(st.get("shadow",[]))>=MAX_SHADOW:return
+    key=f"{sym}|{tf}|{side}|{typ}|{','.join(sorted(reasons))}"
+    cool=st.setdefault("shadow_cool",{})
+    if key in cool and bars_since(d,int(cool[key])) < 12:return
+    if abs(p-sl)<1e-12 or abs(p-tp)<1e-12:return
+    
+    a_now = atr(d).iloc[-1]
+    st.setdefault("shadow",[]).append({"sym":sym,"tf":tf,"dir":side,"type":typ,"reasons":list(reasons),
+        "entry":float(p),"sl":float(sl),"tp":float(tp),"orig_sl":float(sl),"score":int(score),"ts":int(time.time()),
+        "sent_ts":int(d.ts.iloc[-1]), "alert_ts":int(time.time()*1000),
+        "a": float(a_now) if not pd.isna(a_now) else 0.0})
+    cool[key]=int(d.ts.iloc[-1])
 
 def post(txt):
     if not WEBHOOK:return False
@@ -276,6 +291,7 @@ def clean(st):
         
     st["sent"]={k:v for k,v in st.get("sent",{}).items() if is_keep(v)}
     st["cool"]={k:v for k,v in st.get("cool",{}).items() if is_keep(v)}
+    st["shadow_cool"]={k:v for k,v in st.get("shadow_cool",{}).items() if is_keep(v)}
     kc=int(time.time())-KEEP_RESULT_DAYS*86400
     st["results"]=[r for r in st.get("results",[]) if r.get("ts",0)>=kc]
 
@@ -283,7 +299,8 @@ def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
     if st.get("last_report")==today or n.hour>=12:return
     cut=int(time.time())-86400
-    rs=[r for r in st.get("results",[]) if r["ts"]>=cut]
+    rs=[r for r in st.get("results",[]) if r["ts"]>=cut and not r.get("shadow")]
+    sh=[r for r in st.get("results",[]) if r["ts"]>=cut and r.get("shadow")]
     L=["宝宝巴士🚌上车就赚","📊 每日统计（警报）"];tw=tl=te=tto=tbe=0
     combos=[(tf,t,f"{tf}{TYP[t]}") for tf in ("1H","1D") for t in ("PREPARE","TREND","BREAKOUT")]
     lv=st.get("live",[])
@@ -322,20 +339,41 @@ def daily_report(st):
     L.append(f"警报 合计：止盈{tw} 保本{tbe} 止损{tl} 超时{tto}(不计胜率) 在追{len(lv)} 胜率{(tw/tt*100) if tt else 0:.0f}% MFE均 胜{wa:.2f}% 负{la:.2f}%({lpa:.0f}%) 超{ta:.2f}%")
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    if sh or st.get("shadow"):
+        L.append(f"\n👻 影子单（仅记录第一墙过近）")
+        groups={}
+        for r in sh:
+            reasons = r.get("reasons") or ["?"]
+            for reason in reasons: 
+                groups.setdefault(reason,[]).append(r)
+        for k,sb in sorted(groups.items()):
+            w,l,be=sum(1 for r in sb if r["result"]=="WIN"),sum(1 for r in sb if r["result"]=="LOSS"),sum(1 for r in sb if r["result"]=="BE")
+            mfes=[r["mfe"] for r in sb if "mfe" in r]; ma=sum(mfes)/len(mfes) if mfes else 0
+            L.append(f"  【被拦[{k}]：盈{w} 损{l} 胜率{(w/(w+l)*100) if (w+l) else 0:.0f}% MFE均{ma:.2f}%】")
+            
+            # 影子单明细
+            for r in sb:
+                sym_s=r["sym"].replace("-USDT-SWAP","")
+                t_open=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
+                t_close=datetime.fromtimestamp(r["rec_ts"]/1000,BJ_TZ).strftime("%m-%d %H:%M") if r.get("rec_ts") else ""
+                mae=f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
+                close_tag=f"平:{t_close}" if r["result"]!="TIMEOUT" else f"超时:{t_close}"
+                L.append(f"    {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分{r.get('score',0)} 入{r.get('entry',0):.8g} 损{r.get('orig_sl', r.get('sl',0)):.8g} 盈{r.get('tp',0):.8g} 被拦[{k}] MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae} 开:{t_open} {close_tag}")
+
+        sh_live=[x for x in st.get("shadow",[])]
+        if sh_live:
+            L.append(f"\n👻 影子在跟明细（{len(sh_live)}条）：")
+            for s in sh_live:
+                t_open=datetime.fromtimestamp((s.get("alert_ts") or s.get("sent_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (s.get("alert_ts") or s.get("sent_ts")) else ""
+                reasons_str = "+".join(s.get('reasons',[]))
+                L.append(f"  {s['tf']}{TYP[s['type']]} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 分{s.get('score',0)} 入{s.get('entry',0):.8g} 损{s.get('orig_sl', s.get('sl',0)):.8g} 盈{s.get('tp',0):.8g} 被拦[{reasons_str}] 开:{t_open}")
+        L.append(f"  影子在跟：{len(sh_live)}/{MAX_SHADOW} 条")
+
     wins=[r for r in rs if r["result"]=="WIN" and "mfe" in r]
     wins.sort(key=lambda x:-x.get("score",0))
     if wins:
         L.append(f"\n🏆 止盈明细（{len(wins)}条，按分数降序）：")
         for r in wins:
-            sym_s=r["sym"].replace("-USDT-SWAP","")
-            t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
-            L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
-
-    bes=[r for r in rs if r["result"]=="BE" and "mfe" in r]
-    bes.sort(key=lambda x:-x.get("score",0))
-    if bes:
-        L.append(f"\n🛡️ 保本明细（{len(bes)}条，按分数降序）：")
-        for r in bes:
             sym_s=r["sym"].replace("-USDT-SWAP","")
             t_str=datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000,BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
             L.append(f"  {r['tf']}{TYP[r['type']]} {sym_s} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str}")
@@ -408,7 +446,7 @@ def resolve(sym,side,sl,tp,ts0,ts1,tf):
         r=try_res(sym,b,side,sl,tp,ts0,ts1)
         if r is not None: return r
 
-def prepare(d,tf,sym):
+def prepare(d,tf,sym,st):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
     a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
@@ -464,46 +502,45 @@ def prepare(d,tf,sym):
             sl=calc_sl_struct(d,tf,p,"LONG",av);risk=p-sl
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"res")
+            tp=None; first_too_close=False
             
-            # === 前置空间死卡 ===
             if cands:
-                first_price = cands[0][0]
-                if (first_price*disc_l - p) / risk < need_rr:
-                    continue # 第一道墙太近，空间不够，直接死
-            # ==================
-            
-            tp=None
-            for price,_ in cands:
-                cd=price*disc_l
-                if cd>p and (cd-p)/risk>=need_rr:
-                    tp=cd;break
+                for idx,(price,_) in enumerate(cands):
+                    cd=price*disc_l
+                    if cd>p:
+                        if idx==0 and (cd-p)/risk < need_rr:
+                            first_too_close = True
+                        if (cd-p)/risk >= need_rr:
+                            tp=cd
+                            break
             if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"sup")
+            tp=None; first_too_close=False
             
-            # === 前置空间死卡 ===
             if cands:
-                first_price = cands[0][0]
-                if (p - first_price*disc_s) / risk < need_rr:
-                    continue # 第一道墙太近，空间不够，直接死
-            # ==================
-            
-            tp=None
-            for price,_ in cands:
-                cd=price*disc_s
-                if cd<p and (p-cd)/risk>=need_rr:
-                    tp=cd;break
+                for idx,(price,_) in enumerate(cands):
+                    cd=price*disc_s
+                    if cd<p:
+                        if idx==0 and (p-cd)/risk < need_rr:
+                            first_too_close = True
+                        if (p-cd)/risk >= need_rr:
+                            tp=cd
+                            break
             if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
+            if first_too_close:
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["第一墙过近"],d,int(s))
+            else:
+                out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
     return max(out,key=lambda x:x["score"]) if out else None
 
-def normal(d,tf,sym):
+def normal(d,tf,sym,st):
     if d is None or len(d)<210:return
     p=d.c.iloc[-1]
     e20s=ema(d.c,20);e60s=ema(d.c,60);e120s=ema(d.c,120)
@@ -545,84 +582,76 @@ def normal(d,tf,sym):
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
+            tp_c=None; first_too_close=False
             
-            # === 前置空间死卡 ===
             if cands:
-                first_price = cands[0][0]
-                if (first_price*disc_l - p) / risk < tr_rr:
-                    pass # 第一道墙太近，跳过
-                else:
-                    for price,_ in cands:
-                        if price<=p:continue
-                        tp_c=min(price*disc_l, p+5*a)
-                        if (tp_c-p)/risk>=tr_rr:
-                            add("LONG","TREND",sl_c,tp_c,tr_rr);break
+                for idx,(price,_) in enumerate(cands):
+                    if price<=p:continue
+                    tp_temp=min(price*disc_l, p+5*a)
+                    if idx==0 and (tp_temp-p)/risk < tr_rr:
+                        first_too_close = True
+                    if (tp_temp-p)/risk >= tr_rr:
+                        tp_c=tp_temp
+                        break
             else: 
-                add("LONG","TREND",sl_c,p+5*a,tr_rr)
-            # ==================
+                tp_c = p+5*a
+                
+            if tp_c:
+                if first_too_close:
+                    rec_shadow(st,sym,tf,"LONG","TREND",p,sl_c,tp_c,["第一墙过近"],d,73)
+                else:
+                    add("LONG","TREND",sl_c,tp_c,tr_rr)
             
     # 做空趋势
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
+            tp_c=None; first_too_close=False
             
-            # === 前置空间死卡 ===
             if cands:
-                first_price = cands[0][0]
-                if (p - first_price*disc_s) / risk < tr_rr:
-                    pass # 第一道墙太近，跳过
-                else:
-                    for price,_ in cands:
-                        if price>=p:continue
-                        tp_c=max(price*disc_s, p-5*a)
-                        if (p-tp_c)/risk>=tr_rr:
-                            add("SHORT","TREND",sl_c,tp_c,tr_rr);break
+                for idx,(price,_) in enumerate(cands):
+                    if price>=p:continue
+                    tp_temp=max(price*disc_s, p-5*a)
+                    if idx==0 and (p-tp_temp)/risk < tr_rr:
+                        first_too_close = True
+                    if (p-tp_temp)/risk >= tr_rr:
+                        tp_c=tp_temp
+                        break
             else: 
-                add("SHORT","TREND",sl_c,p-5*a,tr_rr)
-            # ==================
+                tp_c = p-5*a
+                
+            if tp_c:
+                if first_too_close:
+                    rec_shadow(st,sym,tf,"SHORT","TREND",p,sl_c,tp_c,["第一墙过近"],d,73)
+                else:
+                    add("SHORT","TREND",sl_c,tp_c,tr_rr)
 
+    # 突破单（这里直接按2R算，不找前高，所以无前置空间死卡）
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
-    
     real_body = abs(p - d.o.iloc[-1])
     real_body_safe = max(real_body, a * 0.01)
     upper_wick = d.h.iloc[-1] - max(p, d.o.iloc[-1])
     lower_wick = min(p, d.o.iloc[-1]) - d.l.iloc[-1]
 
-    # 做多突破（带前置空间检查）
     if d.c.iloc[-2]>hi and d.l.iloc[-1]>hi and d.c.iloc[-1]>hi and d.c.iloc[-1]<=hi+chase_atr*a and 1.5<=vr<8.0 and upper_wick < real_body_safe * 0.5:
         sl_c = hi - 0.2 * a
         risk = p - sl_c
         if risk > 0:
-            cands = find_swing_levels(d,tf,p,"res")
-            if cands:
-                first_price = cands[0][0]
-                if (first_price*disc_l - p)/risk >= 2.0:
-                    tp_c = p + 2.0 * risk
-                    add("LONG","BREAKOUT",sl_c,tp_c,2.0)
-            else:
-                tp_c = p + 2.0 * risk
-                add("LONG","BREAKOUT",sl_c,tp_c,2.0)
+            tp_c = p + 2.0 * risk
+            add("LONG","BREAKOUT",sl_c,tp_c,2.0)
             
-    # 做空突破（带前置空间检查）
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.5<=vr<8.0 and lower_wick < real_body_safe * 0.5:
         sl_c = lo + 0.2 * a
         risk = sl_c - p
         if risk > 0:
-            cands = find_swing_levels(d,tf,p,"sup")
-            if cands:
-                first_price = cands[0][0]
-                if (p - first_price*disc_s)/risk >= 2.0:
-                    tp_c = p - 2.0 * risk
-                    add("SHORT","BREAKOUT",sl_c,tp_c,2.0)
-            else:
-                tp_c = p - 2.0 * risk
-                add("SHORT","BREAKOUT",sl_c,tp_c,2.0)
+            tp_c = p - 2.0 * risk
+            add("SHORT","BREAKOUT",sl_c,tp_c,2.0)
             
     return max(out,key=lambda x:x["score"]) if out else None
 
-def signal(d,tf,sym):
-    p=prepare(d,tf,sym);n=normal(d,tf,sym)
+def signal(d,tf,sym,st):
+    p=prepare(d,tf,sym,st);n=normal(d,tf,sym,st)
     if p and n:return p if p["score"]>=n["score"] else n
     return p or n
 
@@ -644,9 +673,10 @@ def send_signal(st,s):
         return True
     return False
 
-def check_live(st):
+def check_live(st, is_shadow=False):
+    pool_key = "shadow" if is_shadow else "live"
     keep=[]
-    for s in st.get("live") or []:
+    for s in st.get(pool_key) or []:
         tf=s.get("tf")
         if tf not in TF:continue
         d=candles(s["sym"],TF[tf][0],300)
@@ -687,22 +717,48 @@ def check_live(st):
             mfe_pct=mfp/tpd if tpd>0 else 0
         else:mfe_pct=0
             
-        if res_status == "LOSS":
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"LOSS",mfe,mfe_pct)
-            log("SL",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
-        if res_status == "WIN":
-            mark(st,s["sym"],tf,side,typ,d,"cool");rec(st,s,"WIN",mfe,mfe_pct)
-            log("TP",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
+        if res_status in ("LOSS","WIN"):
+            if not is_shadow:
+                mark(st,s["sym"],tf,side,typ,d,"cool")
+                rec(st,s,res_status,mfe,mfe_pct)
+                log(res_status,s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
+            else:
+                st.setdefault("results",[]).append({
+                    "sym":s["sym"],"tf":tf,"dir":side,"type":typ,"result":res_status,
+                    "ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),
+                    "alert_ts":s.get("alert_ts"),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),
+                    "sl":s.get("sl",0),"orig_sl":s.get("orig_sl", s.get("sl",0)),"tp":tp,
+                    "mfe":round(mfe*100,2),"mfe_pct":round(min(mfe_pct,1.0)*100,1),
+                    "mae":0,"mae_pct":0,
+                    "shadow":True,"reasons":s.get("reasons",[])
+                })
+                log("SHADOW",res_status,s["sym"],tf)
+            continue
             
         if bars_since(d,ts0)>=MAX_HOLD.get(tf,100):
-            rec(st,s,"TIMEOUT",mfe,mfe_pct);log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%");continue
+            if not is_shadow:
+                rec(st,s,"TIMEOUT",mfe,mfe_pct)
+                log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
+            else:
+                st.setdefault("results",[]).append({
+                    "sym":s["sym"],"tf":tf,"dir":side,"type":typ,"result":"TIMEOUT",
+                    "ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),
+                    "alert_ts":s.get("alert_ts"),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),
+                    "sl":s.get("sl",0),"orig_sl":s.get("orig_sl", s.get("sl",0)),"tp":tp,
+                    "mfe":round(mfe*100,2),"mfe_pct":round(min(mfe_pct,1.0)*100,1),
+                    "mae":0,"mae_pct":0,
+                    "shadow":True,"reasons":s.get("reasons",[])
+                })
+                log("SHADOW","TIMEOUT",s["sym"],tf)
+            continue
         keep.append(s)
-    st["live"]=keep[-MAX_LIVE:]
+    st[pool_key]=keep[-MAX_LIVE:]
 
 def scan():
     btc_cache.clear()
     st=load_state();clean(st)
-    check_live(st)
+    check_live(st, is_shadow=False)
+    check_live(st, is_shadow=True)
     save_state(st)
     daily_report(st)
     ss=coins()
@@ -717,11 +773,10 @@ def scan():
             if stop:break
             try:
                 dd=candles(sym,bar,n)
-                s=signal(dd,tf,sym)
+                s=signal(dd,tf,sym,st)
                 if not s:continue
                 if too_soon(st,s["sym"],tf,s["dir"],s["type"],dd,DEDUP_BARS):continue
                 
-                # 止血包1：in_live 死锁，防止重复发单
                 in_live = False
                 for lv_item in st.get("live", []):
                     if lv_item.get("sym") == s["sym"] and lv_item.get("tf") == tf:
