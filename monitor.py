@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（带影子单明细）
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（4H实时+1H收盘）
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -104,13 +104,17 @@ def candles(sym,bar,n=300):
                        columns=["ts","o","h","l","c","v","ok"])
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
-        bar_ms=3600*1000
-        if bar=="1D":bar_ms=86400*1000
-        elif bar=="15m":bar_ms=15*60*1000
-        elif bar=="5m":bar_ms=5*60*1000
-        elif bar=="1m":bar_ms=1*60*1000
-        if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
-            d=d.iloc[:-1].reset_index(drop=True)
+        
+        # 修改：除了 4H 以外，其他级别（1H/1D）才剔除未收盘的最后一根
+        if bar != "4H":
+            bar_ms=3600*1000
+            if bar=="1D":bar_ms=86400*1000
+            elif bar=="15m":bar_ms=15*60*1000
+            elif bar=="5m":bar_ms=5*60*1000
+            elif bar=="1m":bar_ms=1*60*1000
+            if len(d)>0 and (d.ts.iloc[-1]+bar_ms>int(time.time()*1000)):
+                d=d.iloc[:-1].reset_index(drop=True)
+                
         cache[k]=(time.time(),d);return d
     except:return
 
@@ -247,8 +251,7 @@ def rec_shadow(st,sym,tf,side,typ,p,sl,tp,reasons,d,score):
     
     a_now = atr(d).iloc[-1]
     st.setdefault("shadow",[]).append({"sym":sym,"tf":tf,"dir":side,"type":typ,"reasons":list(reasons),
-        "entry":float(p),"sl":float(sl),"tp":float(tp),"orig_sl":float(sl),"score":int(score),"ts":int(time.time()),
-        "sent_ts":int(d.ts.iloc[-1]), "alert_ts":int(time.time()*1000),
+        "entry":float(p),"sl":float(sl),"tp":float(tp),"orig_sl":float(sl),"score":int(score),"ts":int(time.time()),"sent_ts":int(d.ts.iloc[-1]),
         "a": float(a_now) if not pd.isna(a_now) else 0.0})
     cool[key]=int(d.ts.iloc[-1])
 
@@ -431,20 +434,21 @@ def try_res(sym,bar,side,sl,tp,ts0,ts1):
     bar_ms = {"1m": 60*1000, "5m": 5*60*1000, "15m": 15*60*1000, "1H": 3600*1000}
     need = int((ts1 - ts0) / bar_ms[bar]) + 10
     d=candles(sym,bar,min(need, 300))
-    if d is None:return None
+    if d is None:return "UNKNOWN"
     f=d[(d.ts>ts0)&(d.ts<=ts1)]
-    if len(f)==0:return None
+    if len(f)==0:return "UNKNOWN"
     for _,r in f.iterrows():
         hs,ht=(r.l<=sl,r.h>=tp) if side=="LONG" else (r.h>=sl,r.l<=tp)
-        if hs and ht:return "LOSS"
+        if hs and ht:return "UNKNOWN" # 修复：1m也打架，返回UNKNOWN
         if ht:return "WIN"
         if hs:return "LOSS"
-    return None
+    return "UNKNOWN"
 
 def resolve(sym,side,sl,tp,ts0,ts1,tf):
     for b in ["1m","5m","15m"]:
         r=try_res(sym,b,side,sl,tp,ts0,ts1)
-        if r is not None: return r
+        if r in ("WIN","LOSS"): return r
+    return "UNKNOWN"
 
 def prepare(d,tf,sym,st):
     if d is None or len(d)<210:return
@@ -687,6 +691,7 @@ def check_live(st, is_shadow=False):
         
         sl,tp,side=s["sl"],s["tp"],s["dir"];typ=s.get("type","")
         ent=s.get("entry",0) or 0;tp_v=s.get("tp",0) or 0
+        bar_ms=86400000 if tf=="1D" else 3600000
         
         res_status = None
         
@@ -695,19 +700,25 @@ def check_live(st, is_shadow=False):
             ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
             
             if hs and ht:
-                r_res = resolve(s["sym"], side, sl, tp, int(r.ts)-3600*1000, int(r.ts), tf)
+                # 修复：修正时间范围，并且不直接把UNKNOWN当WIN
+                r_res = resolve(s["sym"], side, sl, tp, int(r.ts), int(r.ts)+bar_ms, tf)
                 if r_res == "LOSS":
                     res_status = "LOSS"
-                    break
-                else:
+                elif r_res == "WIN":
                     res_status = "WIN"
-                    break
+                else:
+                    res_status = "UNKNOWN"
+                break
             elif hs:
                 res_status = "LOSS"
                 break
             elif ht:
                 res_status = "WIN"
                 break
+                
+        if res_status == "UNKNOWN":
+            keep.append(s) # 待定，保留信号，下轮继续拉数据
+            continue
                 
         hi=f.h.max();lo=f.l.min()
         mfe=(hi-ent)/ent if (side=="LONG" and ent) else (ent-lo)/ent if ent else 0
