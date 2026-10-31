@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.5 不要保本直接干版
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - V9.6 极简趋势版
 import os, time, json, random, requests, pandas as pd
 from datetime import datetime, timezone, timedelta
 
@@ -542,7 +542,7 @@ def normal(d,tf,sym,st):
         deduct = []
         if typ != "BREAKOUT":
             if 1.5*a < abs(e20-e60) <= 2.0*a: s -= 10; deduct.append("扣分_发散10")
-            if abs(e20-e60) < 0.3*a: s -= 10; deduct.append("扣分_粘合10")
+            # 删除了 abs(e20-e60) < 0.3*a 的扣分
         if abs(p - d.o.iloc[-1]) / a > 1.5 and typ != "BREAKOUT": s -= 10; deduct.append("扣分_恶劣10")
 
         s = min(s, 100)
@@ -577,8 +577,8 @@ def normal(d,tf,sym,st):
     tr_rr=1.5
     bo_rr=1.8
 
-    # 做多趋势
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20) < 1.5*a:
+    # 做多趋势：删除了 e20s.iloc[-1]>e20s.iloc[-4] (均线抬头)
+    if p>e120 and p>e20 and e20>e60*1.001 and (p-e20) < 1.5*a:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a)
         risk=p-sl_c
         if risk>0:
@@ -591,8 +591,8 @@ def normal(d,tf,sym,st):
                         if price>p and (tp_c-p)/risk>=tr_rr:
                             if add("LONG","TREND",sl_c,tp_c,tr_rr): out[-1]["track"]="趋势"; break
                             
-    # 做空趋势
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p) < 1.5*a:
+    # 做空趋势：删除了 e20s.iloc[-1]<e20s.iloc[-4] (均线低头)
+    if p<e120 and p<e20 and e20<e60*0.999 and (e20-p) < 1.5*a:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
         risk=sl_c-p
         if risk>0:
