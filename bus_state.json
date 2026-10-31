@@ -1,1 +1,1 @@
-{"sent": {}, "cool": {}, "live": [], "results": [], "last_report": "2026-10-31"}
+{"sent": {"DOT-USDT-SWAP|1H|SHORT|PREPARE": 1793437200000}, "cool": {}, "live": [{"sym": "DOT-USDT-SWAP", "tf": "1H", "dir": "SHORT", "type": "PREPARE", "entry": 0.9562, "sl": 0.9683428571428572, "tp": 0.9023349999999999, "score": 76, "rr": 4.435941176470609, "hi": 0.0, "lo": 0.0, "sent_ts": 1793437200000, "alert_ts": 1793440892588, "be_sent": false}], "results": [], "last_report": "2026-10-31"}
