@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（防崩溃版）
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（防美股干扰版）
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -84,7 +84,8 @@ def coins():
     a=get("/api/v5/public/instruments",{"instType":"SWAP"})
     b=get("/api/v5/market/tickers",{"instType":"SWAP"})
     if not a or not b:return []
-    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live"}
+    # 修复：加回 instCategory == "1"
+    live={x["instId"] for x in a if x.get("settleCcy")=="USDT" and x.get("state")=="live" and x.get("instCategory")=="1"}
     vol={}
     for x in b:
         v=float(x.get("volCcy24h",0) or 0);p=float(x.get("last",0) or 0);vol[x["instId"]]=v*p
