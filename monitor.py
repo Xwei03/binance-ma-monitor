@@ -1,4 +1,4 @@
-# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（前置空间死卡）
+# 宝宝巴士🚌上车就赚 - OKX 信号扫描 (1H/1D) - 纯净版（防崩溃版）
 import os,time,json,random,requests,pandas as pd
 from datetime import datetime,timezone,timedelta
 
@@ -216,8 +216,10 @@ def save_state(st):
 def sdk(sym,tf,side,typ):return f"{sym}|{tf}|{side}|{typ}"
 
 def too_soon(st,sym,tf,side,typ,d,bars):
-    ts=st.get("cool",{}).get(sdk(sym,tf,side,typ)) or st.get("sent",{}).get(sdk(sym,tf,side,typ))
-    return ts and bars_since(d,int(ts))<bars
+    raw = st.get("cool",{}).get(sdk(sym,tf,side,typ)) or st.get("sent",{}).get(sdk(sym,tf,side,typ))
+    if not raw: return False
+    ts = raw.get("ts", 0) if isinstance(raw, dict) else raw
+    return bars_since(d,int(ts))<bars
 
 def mark(st,sym,tf,side,typ,d,where="sent"):
     st.setdefault(where,{})[sdk(sym,tf,side,typ)]=int(d.ts.iloc[-1])
@@ -266,10 +268,15 @@ def post_long(lines,max_len=1500,gap=2.0):
 
 def clean(st):
     c=(int(time.time())-KEEP_SENT_DAYS*86400)*1000
-    st["sent"]={k:v for k,v in st.get("sent",{}).items() if v>=c}
-    st["cool"]={k:v for k,v in st.get("cool",{}).items() if v>=c}
+    def is_keep(v):
+        if isinstance(v, dict):
+            return v.get("ts", 0) >= c
+        return v >= c
+        
+    st["sent"]={k:v for k,v in st.get("sent",{}).items() if is_keep(v)}
+    st["cool"]={k:v for k,v in st.get("cool",{}).items() if is_keep(v)}
     kc=int(time.time())-KEEP_RESULT_DAYS*86400
-    st["results"]=[r for r in st.get("results",[]) if r["ts"]>=kc]
+    st["results"]=[r for r in st.get("results",[]) if r.get("ts",0)>=kc]
 
 def daily_report(st):
     n=datetime.now(timezone.utc);today=n.strftime("%Y-%m-%d")
