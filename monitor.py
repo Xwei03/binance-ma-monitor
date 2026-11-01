@@ -105,7 +105,7 @@ def candles(sym,bar,n=300):
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
         
-        # 修改：除了 4H 以外，其他级别（1H/1D）才剔除未收盘的最后一根
+        # 除了 4H 以外，其他级别（1H/1D）才剔除未收盘的最后一根
         if bar != "4H":
             bar_ms=3600*1000
             if bar=="1D":bar_ms=86400*1000
@@ -343,7 +343,7 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（仅记录第一墙过近）")
+        L.append(f"\n👻 影子单（仅记录空间过滤拦截二/三）")
         groups={}
         for r in sh:
             reasons = r.get("reasons") or ["?"]
@@ -439,13 +439,14 @@ def try_res(sym,bar,side,sl,tp,ts0,ts1):
     if len(f)==0:return "UNKNOWN"
     for _,r in f.iterrows():
         hs,ht=(r.l<=sl,r.h>=tp) if side=="LONG" else (r.h>=sl,r.l<=tp)
-        if hs and ht:return "UNKNOWN" # 修复：1m也打架，返回UNKNOWN
+        if hs and ht:return "UNKNOWN"
         if ht:return "WIN"
         if hs:return "LOSS"
     return "UNKNOWN"
 
 def resolve(sym,side,sl,tp,ts0,ts1,tf):
-    for b in ["1m","5m","15m"]:
+    bars = ["1H"] if tf=="1D" else ["1m","5m","15m"]
+    for b in bars:
         r=try_res(sym,b,side,sl,tp,ts0,ts1)
         if r in ("WIN","LOSS"): return r
     return "UNKNOWN"
@@ -506,42 +507,50 @@ def prepare(d,tf,sym,st):
             sl=calc_sl_struct(d,tf,p,"LONG",av);risk=p-sl
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"res")
-            tp=None; first_too_close=False
+            tp=None; wall_no=0
+            has_wall = bool(cands)
             
             if cands:
-                for idx,(price,_) in enumerate(cands):
+                for phys_idx,(price,_) in enumerate(cands, start=1):
+                    if phys_idx > 3: break
                     cd=price*disc_l
-                    if cd>p:
-                        if idx==0 and (cd-p)/risk < need_rr:
-                            first_too_close = True
-                        if (cd-p)/risk >= need_rr:
-                            tp=cd
-                            break
-            if tp is None:tp=p+2.0*risk if tf!="1H" else p+2.2*risk
+                    if cd>p and (cd-p)/risk >= need_rr:
+                        tp=cd
+                        wall_no=phys_idx
+                        break
+            if tp is None:
+                if has_wall:
+                    continue
+                tp=p+2.0*risk if tf!="1H" else p+2.2*risk
             rr=(tp-p)/risk
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"sup")
-            tp=None; first_too_close=False
+            tp=None; wall_no=0
+            has_wall = bool(cands)
             
             if cands:
-                for idx,(price,_) in enumerate(cands):
+                for phys_idx,(price,_) in enumerate(cands, start=1):
+                    if phys_idx > 3: break
                     cd=price*disc_s
-                    if cd<p:
-                        if idx==0 and (p-cd)/risk < need_rr:
-                            first_too_close = True
-                        if (p-cd)/risk >= need_rr:
-                            tp=cd
-                            break
-            if tp is None:tp=p-2.0*risk if tf!="1H" else p-2.2*risk
+                    if cd<p and (p-cd)/risk >= need_rr:
+                        tp=cd
+                        wall_no=phys_idx
+                        break
+            if tp is None:
+                if has_wall:
+                    continue
+                tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
 
         if s>=need and rr>=need_rr:
-            if first_too_close:
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["第一墙过近"],d,int(s))
-            else:
+            if wall_no in (0,1):
                 out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
+            elif wall_no==2:
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["空间过滤拦截二"],d,int(s))
+            elif wall_no==3:
+                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["空间过滤拦截三"],d,int(s))
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym,st):
@@ -562,7 +571,7 @@ def normal(d,tf,sym,st):
     gap_max = min(GAP_ATR.get(tf, 2.5) * a / p, GAP_CAP.get(tf,0.04))
     chase_atr = CHASE_ATR.get(tf,2.5)
 
-    def add(side,typ,sl,tp,need_rr):
+    def add(side,typ,sl,tp,need_rr,wall_no=1):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
         if side=="LONG" and h4_bias==-1:return
@@ -577,7 +586,12 @@ def normal(d,tf,sym,st):
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
         if rr>=need_rr and s>=TF[tf][2]:
-            out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
+            if wall_no in (0,1):
+                out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
+            elif wall_no==2:
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["空间过滤拦截二"],d,int(s))
+            elif wall_no==3:
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["空间过滤拦截三"],d,int(s))
 
     tr_rr = 1.5
 
@@ -586,50 +600,40 @@ def normal(d,tf,sym,st):
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
-            tp_c=None; first_too_close=False
-            
+            tp_c=None; wall_no=0
             if cands:
-                for idx,(price,_) in enumerate(cands):
-                    if price<=p:continue
+                for phys_idx,(price,_) in enumerate(cands, start=1):
+                    if phys_idx > 3: break
                     tp_temp=min(price*disc_l, p+5*a)
-                    if idx==0 and (tp_temp-p)/risk < tr_rr:
-                        first_too_close = True
-                    if (tp_temp-p)/risk >= tr_rr:
+                    if tp_temp>p and (tp_temp-p)/risk >= tr_rr:
                         tp_c=tp_temp
+                        wall_no=phys_idx
                         break
-            else: 
+                if tp_c is not None:
+                    add("LONG","TREND",sl_c,tp_c,tr_rr,wall_no)
+            else:
                 tp_c = p+5*a
-                
-            if tp_c:
-                if first_too_close:
-                    rec_shadow(st,sym,tf,"LONG","TREND",p,sl_c,tp_c,["第一墙过近"],d,73)
-                else:
-                    add("LONG","TREND",sl_c,tp_c,tr_rr)
+                add("LONG","TREND",sl_c,tp_c,tr_rr,0)
             
     # 做空趋势
     if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
-            tp_c=None; first_too_close=False
-            
+            tp_c=None; wall_no=0
             if cands:
-                for idx,(price,_) in enumerate(cands):
-                    if price>=p:continue
+                for phys_idx,(price,_) in enumerate(cands, start=1):
+                    if phys_idx > 3: break
                     tp_temp=max(price*disc_s, p-5*a)
-                    if idx==0 and (p-tp_temp)/risk < tr_rr:
-                        first_too_close = True
-                    if (p-tp_temp)/risk >= tr_rr:
+                    if tp_temp<p and (p-tp_temp)/risk >= tr_rr:
                         tp_c=tp_temp
+                        wall_no=phys_idx
                         break
-            else: 
+                if tp_c is not None:
+                    add("SHORT","TREND",sl_c,tp_c,tr_rr,wall_no)
+            else:
                 tp_c = p-5*a
-                
-            if tp_c:
-                if first_too_close:
-                    rec_shadow(st,sym,tf,"SHORT","TREND",p,sl_c,tp_c,["第一墙过近"],d,73)
-                else:
-                    add("SHORT","TREND",sl_c,tp_c,tr_rr)
+                add("SHORT","TREND",sl_c,tp_c,tr_rr,0)
 
     # 突破单（这里直接按2R算，不找前高，所以无前置空间死卡）
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
@@ -700,7 +704,6 @@ def check_live(st, is_shadow=False):
             ht = (r.h >= tp) if side == "LONG" else (r.l <= tp)
             
             if hs and ht:
-                # 修复：修正时间范围，并且不直接把UNKNOWN当WIN
                 r_res = resolve(s["sym"], side, sl, tp, int(r.ts), int(r.ts)+bar_ms, tf)
                 if r_res == "LOSS":
                     res_status = "LOSS"
@@ -717,7 +720,7 @@ def check_live(st, is_shadow=False):
                 break
                 
         if res_status == "UNKNOWN":
-            keep.append(s) # 待定，保留信号，下轮继续拉数据
+            keep.append(s)
             continue
                 
         hi=f.h.max();lo=f.l.min()
@@ -734,13 +737,21 @@ def check_live(st, is_shadow=False):
                 rec(st,s,res_status,mfe,mfe_pct)
                 log(res_status,s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             else:
+                _osl = s.get("orig_sl", s.get("sl", 0)) or 0
+                _risk = abs(ent - _osl) if ent else 0
+                if _risk > 0:
+                    _mae_price = max(0.0, ent - lo) if side=="LONG" else max(0.0, hi - ent)
+                    _mae = _mae_price / ent if ent else 0
+                    _mae_pct = min(_mae_price / _risk, 1.0) * 100
+                else:
+                    _mae = 0; _mae_pct = 0
                 st.setdefault("results",[]).append({
                     "sym":s["sym"],"tf":tf,"dir":side,"type":typ,"result":res_status,
                     "ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),
                     "alert_ts":s.get("alert_ts"),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),
                     "sl":s.get("sl",0),"orig_sl":s.get("orig_sl", s.get("sl",0)),"tp":tp,
                     "mfe":round(mfe*100,2),"mfe_pct":round(min(mfe_pct,1.0)*100,1),
-                    "mae":0,"mae_pct":0,
+                    "mae":round(_mae*100,2),"mae_pct":round(_mae_pct,1),
                     "shadow":True,"reasons":s.get("reasons",[])
                 })
                 log("SHADOW",res_status,s["sym"],tf)
@@ -751,13 +762,21 @@ def check_live(st, is_shadow=False):
                 rec(st,s,"TIMEOUT",mfe,mfe_pct)
                 log("TIMEOUT",s["sym"],tf,f"MFE={mfe*100:.2f}% 进度{min(mfe_pct,1)*100:.0f}%")
             else:
+                _osl = s.get("orig_sl", s.get("sl", 0)) or 0
+                _risk = abs(ent - _osl) if ent else 0
+                if _risk > 0:
+                    _mae_price = max(0.0, ent - lo) if side=="LONG" else max(0.0, hi - ent)
+                    _mae = _mae_price / ent if ent else 0
+                    _mae_pct = min(_mae_price / _risk, 1.0) * 100
+                else:
+                    _mae = 0; _mae_pct = 0
                 st.setdefault("results",[]).append({
                     "sym":s["sym"],"tf":tf,"dir":side,"type":typ,"result":"TIMEOUT",
                     "ts":int(time.time()),"rec_ts":int(time.time()*1000),"score":s.get("score",0),
                     "alert_ts":s.get("alert_ts"),"sig_ts":s.get("sent_ts"),"entry":s.get("entry",0),
                     "sl":s.get("sl",0),"orig_sl":s.get("orig_sl", s.get("sl",0)),"tp":tp,
                     "mfe":round(mfe*100,2),"mfe_pct":round(min(mfe_pct,1.0)*100,1),
-                    "mae":0,"mae_pct":0,
+                    "mae":round(_mae*100,2),"mae_pct":round(_mae_pct,1),
                     "shadow":True,"reasons":s.get("reasons",[])
                 })
                 log("SHADOW","TIMEOUT",s["sym"],tf)
