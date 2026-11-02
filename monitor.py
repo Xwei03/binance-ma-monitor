@@ -482,6 +482,7 @@ def prepare(d,tf,sym,st):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.1*av:continue # 新增：均线黏合过滤
         if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
         if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
         if side=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
@@ -595,8 +596,8 @@ def normal(d,tf,sym,st):
 
     tr_rr = 1.5
 
-    # 做多趋势
-    if p>e120 and p>e20 and e20>e60*1.001 and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
+    # 做多趋势 (加入0.1ATR黏合过滤)
+    if p>e120 and p>e20 and e20>e60 and abs(e20-e60)>=0.1*a and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
@@ -615,8 +616,8 @@ def normal(d,tf,sym,st):
                 tp_c = p+5*a
                 add("LONG","TREND",sl_c,tp_c,tr_rr,0)
             
-    # 做空趋势
-    if p<e120 and p<e20 and e20<e60*0.999 and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
+    # 做空趋势 (加入0.1ATR黏合过滤)
+    if p<e120 and p<e20 and e20<e60 and abs(e20-e60)>=0.1*a and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
