@@ -456,7 +456,7 @@ def prepare(d,tf,sym,st):
     p=d.c.iloc[-1]
     a=atr(d);av=a.iloc[-1];base=a.iloc[-21:-1].mean()
     if pd.isna(av) or pd.isna(base):return
-    e20=ema(d.c,20);e60=ema(d.c,60)
+    e20=ema(d.c,20);e60=ema(d.c,60);e120=ema(d.c,120)
     vr=d.v.iloc[-1]/max(d.v.iloc[-21:-1].mean(),1e-12)
     vr3=d.v.iloc[-3:].mean()/max(d.v.iloc[-13:-3].mean(),1e-12)
     ar=av/base
@@ -470,6 +470,9 @@ def prepare(d,tf,sym,st):
     disc_s = 1.03 if tf=="1D" else 1.015
 
     for side in ("LONG","SHORT"):
+        if side=="LONG" and p < e120.iloc[-1]:continue # 新增：多单必须站上120
+        if side=="SHORT" and p > e120.iloc[-1]:continue # 新增：空单必须跌破120
+
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
         if side=="LONG" and h4_bias==-1:continue
@@ -482,7 +485,7 @@ def prepare(d,tf,sym,st):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
-        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.1*av:continue # 新增：均线黏合过滤
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.1*av:continue # 均线黏合过滤
         if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
         if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
         if side=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
