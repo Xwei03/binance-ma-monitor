@@ -40,7 +40,7 @@ MIN_VOL=10000000
 CN={"1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
-MAX_SHADOW=100 # 老板要求扩到100
+MAX_SHADOW=100
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
@@ -123,13 +123,21 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def find_swing_levels(d,tf,p,side):
+def find_swing_levels(d,tf,p,side,use_close=True):
     n_l=5
     n_r=2 if tf=="1H" else 3
     look=500 if tf=="1H" else 300
-    arr_h=d.h.iloc[-look:-1].values
-    arr_l=d.l.iloc[-look:-1].values
+    
+    # 止盈找墙用收盘价防毛刺，止损找结构用最高最低价防插针
+    if use_close:
+        arr_h=d.c.iloc[-look:-1].values 
+        arr_l=d.c.iloc[-look:-1].values 
+    else:
+        arr_h=d.h.iloc[-look:-1].values 
+        arr_l=d.l.iloc[-look:-1].values 
+        
     arr_v=d.v.iloc[-look:-1].values
+    
     m=len(arr_h)
     if m<n_l+n_r+1:return []
     avg_vol=d.v.iloc[-21:-1].mean()
@@ -176,17 +184,21 @@ def calc_sl_struct(d,tf,p,side,a):
     sl_cap = 2.0*a if tf=="1H" else 2.5*a
     buf = 1.0*a
     if side=="LONG":
-        sup_list=find_swing_levels(d,tf,p,"sup")
+        sup_list=find_swing_levels(d,tf,p,"sup",use_close=False)
         sup=sup_list[0][0] if sup_list else None
         if sup is None:return p - sl_cap
         sl_c = sup - buf
-        return p - sl_cap if (p - sl_c) > sl_cap else sl_c
+        if (p - sl_c) > sl_cap:
+            return None # 结构位太远，直接放弃
+        return sl_c
     else:
-        res_list=find_swing_levels(d,tf,p,"res")
+        res_list=find_swing_levels(d,tf,p,"res",use_close=False)
         res=res_list[0][0] if res_list else None
         if res is None:return p + sl_cap
         sl_c = res + buf
-        return p + sl_cap if (sl_c - p) > sl_cap else sl_c
+        if (sl_c - p) > sl_cap:
+            return None # 结构位太远，直接放弃
+        return sl_c
 
 def btc(bar):
     if bar in btc_cache:return btc_cache[bar]
@@ -507,35 +519,38 @@ def prepare(d,tf,sym,st):
         need_rr=1.5 if tf=="1H" else 2.0
 
         if side=="LONG":
-            sl=calc_sl_struct(d,tf,p,"LONG",av);risk=p-sl
+            sl=calc_sl_struct(d,tf,p,"LONG",av)
+            if sl is None: continue # 结构位太远直接放弃
+            risk=p-sl
             if risk<=0:continue
-            cands=find_swing_levels(d,tf,p,"res")
+            cands=find_swing_levels(d,tf,p,"res",use_close=True) 
             tp=None
             has_wall = bool(cands)
             
             if cands:
-                for price,_ in cands: # 老逻辑：只要后面有够的就发
+                for price,_ in cands: 
                     cd=price*disc_l
                     if cd>p and (cd-p)/risk >= need_rr:
                         tp=cd
                         break
             if tp is None:
-                if has_wall: continue # 有墙但全不够，直接死
-                tp=p+2.0*risk if tf!="1H" else p+2.2*risk # 没墙兜底
+                if has_wall: continue 
+                tp=p+2.0*risk if tf!="1H" else p+2.2*risk 
             rr=(tp-p)/risk
             
-            # 测铁板逻辑
             if has_wall:
                 first_wall_price = cands[0][0]
                 dist_to_wall = first_wall_price - p
                 if dist_to_wall < 0.5 * av:
                     if s>=need and rr>=need_rr:
                         rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["贴脸铁板"],d,int(s))
-                    continue # 贴脸的拦下，不发实盘
+                    continue 
         else:
-            sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
+            sl=calc_sl_struct(d,tf,p,"SHORT",av)
+            if sl is None: continue # 结构位太远直接放弃
+            risk=sl-p
             if risk<=0:continue
-            cands=find_swing_levels(d,tf,p,"sup")
+            cands=find_swing_levels(d,tf,p,"sup",use_close=True) 
             tp=None
             has_wall = bool(cands)
             
@@ -550,7 +565,6 @@ def prepare(d,tf,sym,st):
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
             
-            # 测铁板逻辑
             if has_wall:
                 first_wall_price = cands[0][0]
                 dist_to_wall = p - first_wall_price
@@ -598,7 +612,6 @@ def normal(d,tf,sym,st):
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
         
         if rr>=need_rr and s>=TF[tf][2]:
-            # 测铁板逻辑
             if wall_dist is not None and wall_dist < 0.5 * a:
                 rec_shadow(st,sym,tf,side,typ,p,sl,tp,["贴脸铁板"],d,int(s))
             else:
@@ -608,43 +621,47 @@ def normal(d,tf,sym,st):
 
     # 做多趋势
     if p>e120 and p>e20 and e20>e60 and abs(e20-e60)>=0.1*a and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
-        sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
-        if risk>0:
-            cands=find_swing_levels(d,tf,p,"res")
-            tp_c=None; wall_dist=None
-            if cands:
-                wall_dist = cands[0][0] - p
-                for price,_ in cands:
-                    tp_temp=min(price*disc_l, p+5*a)
-                    if tp_temp>p and (tp_temp-p)/risk >= tr_rr:
-                        tp_c=tp_temp
-                        break
-                if tp_c is not None:
-                    add("LONG","TREND",sl_c,tp_c,tr_rr,wall_dist)
-            else:
-                tp_c = p+5*a
-                add("LONG","TREND",sl_c,tp_c,tr_rr,None)
+        sl_c=calc_sl_struct(d,tf,p,"LONG",a)
+        if sl_c is not None:
+            risk=p-sl_c
+            if risk>0:
+                cands=find_swing_levels(d,tf,p,"res",use_close=True) 
+                tp_c=None; wall_dist=None
+                if cands:
+                    wall_dist = cands[0][0] - p
+                    for price,_ in cands:
+                        tp_temp=min(price*disc_l, p+5*a)
+                        if tp_temp>p and (tp_temp-p)/risk >= tr_rr:
+                            tp_c=tp_temp
+                            break
+                    if tp_c is not None:
+                        add("LONG","TREND",sl_c,tp_c,tr_rr,wall_dist)
+                else:
+                    tp_c = p+5*a
+                    add("LONG","TREND",sl_c,tp_c,tr_rr,None)
             
     # 做空趋势
     if p<e120 and p<e20 and e20<e60 and abs(e20-e60)>=0.1*a and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
-        sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
-        if risk>0:
-            cands=find_swing_levels(d,tf,p,"sup")
-            tp_c=None; wall_dist=None
-            if cands:
-                wall_dist = p - cands[0][0]
-                for price,_ in cands:
-                    tp_temp=max(price*disc_s, p-5*a)
-                    if tp_temp<p and (p-tp_temp)/risk >= tr_rr:
-                        tp_c=tp_temp
-                        break
-                if tp_c is not None:
-                    add("SHORT","TREND",sl_c,tp_c,tr_rr,wall_dist)
-            else:
-                tp_c = p-5*a
-                add("SHORT","TREND",sl_c,tp_c,tr_rr,None)
+        sl_c=calc_sl_struct(d,tf,p,"SHORT",a)
+        if sl_c is not None:
+            risk=sl_c-p
+            if risk>0:
+                cands=find_swing_levels(d,tf,p,"sup",use_close=True) 
+                tp_c=None; wall_dist=None
+                if cands:
+                    wall_dist = p - cands[0][0]
+                    for price,_ in cands:
+                        tp_temp=max(price*disc_s, p-5*a)
+                        if tp_temp<p and (p-tp_temp)/risk >= tr_rr:
+                            tp_c=tp_temp
+                            break
+                    if tp_c is not None:
+                        add("SHORT","TREND",sl_c,tp_c,tr_rr,wall_dist)
+                else:
+                    tp_c = p-5*a
+                    add("SHORT","TREND",sl_c,tp_c,tr_rr,None)
 
-    # 突破单（直接按2R算，不找前高，所以无前置空间死卡，也不测贴脸）
+    # 突破单（这里直接按2R算，不找前高，所以无前置空间死卡）
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     real_body = abs(p - d.o.iloc[-1])
     real_body_safe = max(real_body, a * 0.01)
