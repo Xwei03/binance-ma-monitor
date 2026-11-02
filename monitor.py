@@ -40,7 +40,7 @@ MIN_VOL=10000000
 CN={"1H":"1小时","1D":"1天"}
 DIR={"LONG":"做多","SHORT":"做空"}
 TYP={"PREPARE":"启动前埋伏","TREND":"趋势","BREAKOUT":"突破"}
-MAX_SHADOW=50
+MAX_SHADOW=100 # 老板要求扩到100
 
 cache={};btc_cache={};stop=False
 last_req=[0.0]
@@ -105,7 +105,6 @@ def candles(sym,bar,n=300):
         d=d[d.ok=="1"].reset_index(drop=True)
         if len(d)<12:return
         
-        # 除了 4H 以外，其他级别（1H/1D）才剔除未收盘的最后一根
         if bar != "4H":
             bar_ms=3600*1000
             if bar=="1D":bar_ms=86400*1000
@@ -343,7 +342,7 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（仅记录空间过滤拦截二/三）")
+        L.append(f"\n👻 影子单（测试贴脸铁板）")
         groups={}
         for r in sh:
             reasons = r.get("reasons") or ["?"]
@@ -470,8 +469,8 @@ def prepare(d,tf,sym,st):
     disc_s = 1.03 if tf=="1D" else 1.015
 
     for side in ("LONG","SHORT"):
-        if side=="LONG" and p < e120.iloc[-1]:continue # 新增：多单必须站上120
-        if side=="SHORT" and p > e120.iloc[-1]:continue # 新增：空单必须跌破120
+        if side=="LONG" and p < e120.iloc[-1]:continue 
+        if side=="SHORT" and p > e120.iloc[-1]:continue 
 
         if side=="LONG" and p<=d.o.iloc[-1]:continue
         if side=="SHORT" and p>=d.o.iloc[-1]:continue
@@ -485,7 +484,7 @@ def prepare(d,tf,sym,st):
             d_e20=(e20.iloc[-1]-p)/p
             if d_e20<0 or d_e20>gap_max:continue
         if abs(e20.iloc[-1]-e60.iloc[-1]) > 1.0*av:continue
-        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.1*av:continue # 均线黏合过滤
+        if abs(e20.iloc[-1]-e60.iloc[-1]) < 0.1*av:continue 
         if side=="LONG" and e20.iloc[-1]<=e60.iloc[-1]:continue
         if side=="SHORT" and e20.iloc[-1]>=e60.iloc[-1]:continue
         if side=="LONG" and (p - e60.iloc[-1]) < 0.5*av:continue
@@ -511,50 +510,58 @@ def prepare(d,tf,sym,st):
             sl=calc_sl_struct(d,tf,p,"LONG",av);risk=p-sl
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"res")
-            tp=None; wall_no=0
+            tp=None
             has_wall = bool(cands)
             
             if cands:
-                for phys_idx,(price,_) in enumerate(cands, start=1):
-                    if phys_idx > 3: break
+                for price,_ in cands: # 老逻辑：只要后面有够的就发
                     cd=price*disc_l
                     if cd>p and (cd-p)/risk >= need_rr:
                         tp=cd
-                        wall_no=phys_idx
                         break
             if tp is None:
-                if has_wall:
-                    continue
-                tp=p+2.0*risk if tf!="1H" else p+2.2*risk
+                if has_wall: continue # 有墙但全不够，直接死
+                tp=p+2.0*risk if tf!="1H" else p+2.2*risk # 没墙兜底
             rr=(tp-p)/risk
+            
+            # 测铁板逻辑
+            if has_wall:
+                first_wall_price = cands[0][0]
+                dist_to_wall = first_wall_price - p
+                if dist_to_wall < 0.5 * av:
+                    if s>=need and rr>=need_rr:
+                        rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["贴脸铁板"],d,int(s))
+                    continue # 贴脸的拦下，不发实盘
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av);risk=sl-p
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"sup")
-            tp=None; wall_no=0
+            tp=None
             has_wall = bool(cands)
             
             if cands:
-                for phys_idx,(price,_) in enumerate(cands, start=1):
-                    if phys_idx > 3: break
+                for price,_ in cands:
                     cd=price*disc_s
                     if cd<p and (p-cd)/risk >= need_rr:
                         tp=cd
-                        wall_no=phys_idx
                         break
             if tp is None:
-                if has_wall:
-                    continue
+                if has_wall: continue
                 tp=p-2.0*risk if tf!="1H" else p-2.2*risk
             rr=(p-tp)/risk
+            
+            # 测铁板逻辑
+            if has_wall:
+                first_wall_price = cands[0][0]
+                dist_to_wall = p - first_wall_price
+                if dist_to_wall < 0.5 * av:
+                    if s>=need and rr>=need_rr:
+                        rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["贴脸铁板"],d,int(s))
+                    continue
 
         if s>=need and rr>=need_rr:
-            if wall_no in (0,1):
-                out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
-            elif wall_no==2:
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["空间过滤拦截二"],d,int(s))
-            elif wall_no==3:
-                rec_shadow(st,sym,tf,side,"PREPARE",p,sl,tp,["空间过滤拦截三"],d,int(s))
+            out.append({"sym":sym,"tf":tf,"dir":side,"type":"PREPARE","score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr,"anchor":int(d.ts.iloc[-11]),"hi":0.0,"lo":0.0})
+            
     return max(out,key=lambda x:x["score"]) if out else None
 
 def normal(d,tf,sym,st):
@@ -575,7 +582,7 @@ def normal(d,tf,sym,st):
     gap_max = min(GAP_ATR.get(tf, 2.5) * a / p, GAP_CAP.get(tf,0.04))
     chase_atr = CHASE_ATR.get(tf,2.5)
 
-    def add(side,typ,sl,tp,need_rr,wall_no=1):
+    def add(side,typ,sl,tp,need_rr,wall_dist=None):
         if side=="LONG" and p<=d.o.iloc[-1]:return
         if side=="SHORT" and p>=d.o.iloc[-1]:return
         if side=="LONG" and h4_bias==-1:return
@@ -589,57 +596,55 @@ def normal(d,tf,sym,st):
         else: v=30 if 2<=vr<2.5 else 25 if 2.5<=vr<3 else 15 if vr>=3 else 20 if vr>=1.5 else 10 if vr>=1.2 else 0
         s=v+(25 if body>=.6 else 12 if body>=.45 else 0)+(20 if a>aa*1.05 else 0)+(6 if bs==0 else min(max(bs if side=="LONG" else -bs,0),15))
         if (side=="LONG" and p>e20) or (side=="SHORT" and p<e20):s+=10
+        
         if rr>=need_rr and s>=TF[tf][2]:
-            if wall_no in (0,1):
+            # 测铁板逻辑
+            if wall_dist is not None and wall_dist < 0.5 * a:
+                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["贴脸铁板"],d,int(s))
+            else:
                 out.append({"sym":sym,"tf":tf,"dir":side,"type":typ,"score":int(s),"entry":p,"sl":sl,"tp":tp,"rr":rr})
-            elif wall_no==2:
-                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["空间过滤拦截二"],d,int(s))
-            elif wall_no==3:
-                rec_shadow(st,sym,tf,side,typ,p,sl,tp,["空间过滤拦截三"],d,int(s))
 
     tr_rr = 1.5
 
-    # 做多趋势 (加入0.1ATR黏合过滤)
+    # 做多趋势
     if p>e120 and p>e20 and e20>e60 and abs(e20-e60)>=0.1*a and e20s.iloc[-1]>e20s.iloc[-4] and (p-e20)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"LONG",a);risk=p-sl_c
         if risk>0:
             cands=find_swing_levels(d,tf,p,"res")
-            tp_c=None; wall_no=0
+            tp_c=None; wall_dist=None
             if cands:
-                for phys_idx,(price,_) in enumerate(cands, start=1):
-                    if phys_idx > 3: break
+                wall_dist = cands[0][0] - p
+                for price,_ in cands:
                     tp_temp=min(price*disc_l, p+5*a)
                     if tp_temp>p and (tp_temp-p)/risk >= tr_rr:
                         tp_c=tp_temp
-                        wall_no=phys_idx
                         break
                 if tp_c is not None:
-                    add("LONG","TREND",sl_c,tp_c,tr_rr,wall_no)
+                    add("LONG","TREND",sl_c,tp_c,tr_rr,wall_dist)
             else:
                 tp_c = p+5*a
-                add("LONG","TREND",sl_c,tp_c,tr_rr,0)
+                add("LONG","TREND",sl_c,tp_c,tr_rr,None)
             
-    # 做空趋势 (加入0.1ATR黏合过滤)
+    # 做空趋势
     if p<e120 and p<e20 and e20<e60 and abs(e20-e60)>=0.1*a and e20s.iloc[-1]<e20s.iloc[-4] and (e20-p)/p<gap_max:
         sl_c=calc_sl_struct(d,tf,p,"SHORT",a);risk=sl_c-p
         if risk>0:
             cands=find_swing_levels(d,tf,p,"sup")
-            tp_c=None; wall_no=0
+            tp_c=None; wall_dist=None
             if cands:
-                for phys_idx,(price,_) in enumerate(cands, start=1):
-                    if phys_idx > 3: break
+                wall_dist = p - cands[0][0]
+                for price,_ in cands:
                     tp_temp=max(price*disc_s, p-5*a)
                     if tp_temp<p and (p-tp_temp)/risk >= tr_rr:
                         tp_c=tp_temp
-                        wall_no=phys_idx
                         break
                 if tp_c is not None:
-                    add("SHORT","TREND",sl_c,tp_c,tr_rr,wall_no)
+                    add("SHORT","TREND",sl_c,tp_c,tr_rr,wall_dist)
             else:
                 tp_c = p-5*a
-                add("SHORT","TREND",sl_c,tp_c,tr_rr,0)
+                add("SHORT","TREND",sl_c,tp_c,tr_rr,None)
 
-    # 突破单（这里直接按2R算，不找前高，所以无前置空间死卡）
+    # 突破单（直接按2R算，不找前高，所以无前置空间死卡，也不测贴脸）
     hi=d.h.iloc[-12:-2].max();lo=d.l.iloc[-12:-2].min()
     real_body = abs(p - d.o.iloc[-1])
     real_body_safe = max(real_body, a * 0.01)
@@ -651,14 +656,14 @@ def normal(d,tf,sym,st):
         risk = p - sl_c
         if risk > 0:
             tp_c = p + 2.0 * risk
-            add("LONG","BREAKOUT",sl_c,tp_c,2.0)
+            add("LONG","BREAKOUT",sl_c,tp_c,2.0,None)
             
     if d.c.iloc[-2]<lo and d.h.iloc[-1]<lo and d.c.iloc[-1]<lo and d.c.iloc[-1]>=lo-chase_atr*a and 1.5<=vr<8.0 and lower_wick < real_body_safe * 0.5:
         sl_c = lo + 0.2 * a
         risk = sl_c - p
         if risk > 0:
             tp_c = p - 2.0 * risk
-            add("SHORT","BREAKOUT",sl_c,tp_c,2.0)
+            add("SHORT","BREAKOUT",sl_c,tp_c,2.0,None)
             
     return max(out,key=lambda x:x["score"]) if out else None
 
