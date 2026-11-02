@@ -128,14 +128,10 @@ def find_swing_levels(d,tf,p,side,use_close=True):
     n_r=2 if tf=="1H" else 3
     look=500 if tf=="1H" else 300
     
-    # 止盈找墙用收盘价防毛刺，止损找结构用最高最低价防插针
-    if use_close:
-        arr_h=d.c.iloc[-look:-1].values 
-        arr_l=d.c.iloc[-look:-1].values 
-    else:
-        arr_h=d.h.iloc[-look:-1].values 
-        arr_l=d.l.iloc[-look:-1].values 
-        
+    arr_h=d.h.iloc[-look:-1].values 
+    arr_l=d.l.iloc[-look:-1].values 
+    arr_o=d.o.iloc[-look:-1].values
+    arr_c=d.c.iloc[-look:-1].values
     arr_v=d.v.iloc[-look:-1].values
     
     m=len(arr_h)
@@ -143,9 +139,17 @@ def find_swing_levels(d,tf,p,side,use_close=True):
     avg_vol=d.v.iloc[-21:-1].mean()
     if pd.isna(avg_vol) or avg_vol<=0:avg_vol=1
     cands=[]
+    
     if side=="res":
         for i in range(n_l,m-n_r):
             if arr_h[i]>=arr_h[i-n_l:i].max() and arr_h[i]>=arr_h[i+1:i+n_r+1].max() and arr_h[i]>p:
+                # 【毛刺过滤器】删掉0.1%的限制，只要影线大于实体2倍就算毛刺
+                if use_close:
+                    upper_wick = arr_h[i] - max(arr_o[i], arr_c[i])
+                    body_size = abs(arr_c[i] - arr_o[i])
+                    if upper_wick > 2.0 * body_size:
+                        continue
+                        
                 price=arr_h[i]
                 tol=price*0.005
                 hits=int(((arr_h>price-tol)&(arr_h<price+tol)).sum())
@@ -155,12 +159,20 @@ def find_swing_levels(d,tf,p,side,use_close=True):
     else:
         for i in range(n_l,m-n_r):
             if arr_l[i]<=arr_l[i-n_l:i].min() and arr_l[i]<=arr_l[i+1:i+n_r+1].min() and arr_l[i]<p:
+                # 【毛刺过滤器】
+                if use_close:
+                    lower_wick = min(arr_o[i], arr_c[i]) - arr_l[i]
+                    body_size = abs(arr_c[i] - arr_o[i])
+                    if lower_wick > 2.0 * body_size:
+                        continue
+                        
                 price=arr_l[i]
                 tol=price*0.005
                 hits=int(((arr_l>price-tol)&(arr_l<price+tol)).sum())
                 vol_ratio=arr_v[i]/avg_vol
                 time_weight=1+(i/m)
                 cands.append((price,vol_ratio*time_weight+hits*0.5))
+                
     if not cands:return []
     cands.sort(key=lambda x:-x[1])
     used=[False]*len(cands)
@@ -189,7 +201,7 @@ def calc_sl_struct(d,tf,p,side,a):
         if sup is None:return p - sl_cap
         sl_c = sup - buf
         if (p - sl_c) > sl_cap:
-            return None # 结构位太远，直接放弃
+            return None 
         return sl_c
     else:
         res_list=find_swing_levels(d,tf,p,"res",use_close=False)
@@ -197,7 +209,7 @@ def calc_sl_struct(d,tf,p,side,a):
         if res is None:return p + sl_cap
         sl_c = res + buf
         if (sl_c - p) > sl_cap:
-            return None # 结构位太远，直接放弃
+            return None 
         return sl_c
 
 def btc(bar):
@@ -520,7 +532,7 @@ def prepare(d,tf,sym,st):
 
         if side=="LONG":
             sl=calc_sl_struct(d,tf,p,"LONG",av)
-            if sl is None: continue # 结构位太远直接放弃
+            if sl is None: continue 
             risk=p-sl
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"res",use_close=True) 
@@ -547,7 +559,7 @@ def prepare(d,tf,sym,st):
                     continue 
         else:
             sl=calc_sl_struct(d,tf,p,"SHORT",av)
-            if sl is None: continue # 结构位太远直接放弃
+            if sl is None: continue 
             risk=sl-p
             if risk<=0:continue
             cands=find_swing_levels(d,tf,p,"sup",use_close=True) 
