@@ -227,7 +227,6 @@ def clean(st):
     kc = int(time.time()) - KEEP_RESULT_DAYS * 86400
     st["results"] = [r for r in st.get("results", []) if r.get("ts", 0) >= kc]
 
-# (daily_report 是发飞书的核心，保留其原有所有的字段和排序逻辑，只精简变量)
 def daily_report(st):
     n = datetime.now(timezone.utc); today = n.strftime("%Y-%m-%d")
     if st.get("last_report") == today or n.hour >= 12: return
@@ -531,9 +530,18 @@ def scan():
                 if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
                 s["sent_ts"] = int(dd.ts.iloc[-1]); hits.append(s)
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
+        
         hits.sort(key=lambda x: -x["score"])
-        cnt = sum(1 for s in hits[:MAX_SEND_PER_SCAN] if send_signal(st, s) or time.sleep(.3) is None)
+        
+        cnt = 0
+        for s in hits[:MAX_SEND_PER_SCAN]:
+            if send_signal(st, s):
+                cnt += 1
+            time.sleep(.3)  # 不管成功失败，都老老实实休眠 0.3 秒防飞书封禁
+            
         save_state(st)
+        log(f"[{tf}] hits {len(hits)} sent {cnt}")
+
     print(now_bj().strftime("%H:%M:%S"), "完成")
 
 if __name__ == "__main__": scan()
