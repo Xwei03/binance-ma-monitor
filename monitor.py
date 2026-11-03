@@ -123,7 +123,7 @@ def atr(d):
     p=d.c.shift()
     return pd.concat([d.h-d.l,(d.h-p).abs(),(d.l-p).abs()],axis=1).max(axis=1).rolling(14).mean()
 
-def find_swing_levels(d,tf,p,side,use_close=True):
+def find_swing_levels(d,tf,p,side,use_close=True,av=None):
     n_l=5
     n_r=2 if tf=="1H" else 3
     look=500 if tf=="1H" else 300
@@ -143,11 +143,11 @@ def find_swing_levels(d,tf,p,side,use_close=True):
     if side=="res":
         for i in range(n_l,m-n_r):
             if arr_h[i]>=arr_h[i-n_l:i].max() and arr_h[i]>=arr_h[i+1:i+n_r+1].max() and arr_h[i]>p:
-                # 【毛刺过滤器】删掉0.1%的限制，只要影线大于实体2倍就算毛刺
-                if use_close:
+                # 【毛刺过滤器】既看比例（>实体2倍），也看深度（>0.8 ATR）
+                if use_close and av is not None:
                     upper_wick = arr_h[i] - max(arr_o[i], arr_c[i])
                     body_size = abs(arr_c[i] - arr_o[i])
-                    if upper_wick > 2.0 * body_size:
+                    if upper_wick > 2.0 * body_size and upper_wick > 0.8 * av:
                         continue
                         
                 price=arr_h[i]
@@ -160,10 +160,10 @@ def find_swing_levels(d,tf,p,side,use_close=True):
         for i in range(n_l,m-n_r):
             if arr_l[i]<=arr_l[i-n_l:i].min() and arr_l[i]<=arr_l[i+1:i+n_r+1].min() and arr_l[i]<p:
                 # 【毛刺过滤器】
-                if use_close:
+                if use_close and av is not None:
                     lower_wick = min(arr_o[i], arr_c[i]) - arr_l[i]
                     body_size = abs(arr_c[i] - arr_o[i])
-                    if lower_wick > 2.0 * body_size:
+                    if lower_wick > 2.0 * body_size and lower_wick > 0.8 * av:
                         continue
                         
                 price=arr_l[i]
@@ -535,7 +535,7 @@ def prepare(d,tf,sym,st):
             if sl is None: continue 
             risk=p-sl
             if risk<=0:continue
-            cands=find_swing_levels(d,tf,p,"res",use_close=True) 
+            cands=find_swing_levels(d,tf,p,"res",use_close=True,av=av) 
             tp=None
             has_wall = bool(cands)
             
@@ -562,7 +562,7 @@ def prepare(d,tf,sym,st):
             if sl is None: continue 
             risk=sl-p
             if risk<=0:continue
-            cands=find_swing_levels(d,tf,p,"sup",use_close=True) 
+            cands=find_swing_levels(d,tf,p,"sup",use_close=True,av=av) 
             tp=None
             has_wall = bool(cands)
             
@@ -637,7 +637,7 @@ def normal(d,tf,sym,st):
         if sl_c is not None:
             risk=p-sl_c
             if risk>0:
-                cands=find_swing_levels(d,tf,p,"res",use_close=True) 
+                cands=find_swing_levels(d,tf,p,"res",use_close=True,av=a) 
                 tp_c=None; wall_dist=None
                 if cands:
                     wall_dist = cands[0][0] - p
@@ -658,7 +658,7 @@ def normal(d,tf,sym,st):
         if sl_c is not None:
             risk=sl_c-p
             if risk>0:
-                cands=find_swing_levels(d,tf,p,"sup",use_close=True) 
+                cands=find_swing_levels(d,tf,p,"sup",use_close=True,av=a) 
                 tp_c=None; wall_dist=None
                 if cands:
                     wall_dist = p - cands[0][0]
