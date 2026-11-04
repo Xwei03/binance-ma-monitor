@@ -75,9 +75,15 @@ def candles(sym, bar, n=300):
         d = pd.DataFrame([[int(a[0]), float(a[1]), float(a[2]), float(a[3]), float(a[4]), float(a[5]), a[8]] for a in reversed(x)], columns=["ts","o","h","l","c","v","ok"])
         d = d[d.ok == "1"].reset_index(drop=True)
         if len(d) < 12: return
-        if bar != "4H":
+        
+        # 修复：4H开盘第一小时看上一根收盘K线；其他时间看正在跑的。其他级别看收盘。
+        if bar == "4H":
+            if len(d) > 0 and (d.ts.iloc[-1] + 3600000 > int(time.time() * 1000)):
+                d = d.iloc[:-1].reset_index(drop=True)
+        else:
             bar_ms = 86400000 if bar == "1D" else (3600000 if bar == "1H" else (15 if bar == "15m" else (5 if bar == "5m" else 1)) * 60000)
             if len(d) > 0 and (d.ts.iloc[-1] + bar_ms > int(time.time() * 1000)): d = d.iloc[:-1].reset_index(drop=True)
+            
         cache[k] = (time.time(), d)
         return d
     except Exception: return
@@ -126,17 +132,14 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     return [(float(price), float(score)) for price, score in merged]
 
 def calc_sl_struct(d, tf, p, side, a):
-    sl_cap = 2.0 * a if tf == "1H" else 2.5 * a
     if side == "LONG":
         sup = find_swing_levels(d, tf, p, "sup", use_close=False)
-        if not sup: return p - sl_cap
-        sl_c = sup[0][0] - a
-        return sl_c if p - sl_c <= sl_cap else None
+        if not sup: return p - 2.0 * a
+        return sup[0][0] - a # 直接返回真实结构位，不管多远
     else:
         res = find_swing_levels(d, tf, p, "res", use_close=False)
-        if not res: return p + sl_cap
-        sl_c = res[0][0] + a
-        return sl_c if sl_c - p <= sl_cap else None
+        if not res: return p + 2.0 * a
+        return res[0][0] + a # 直接返回真实结构位，不管多远
 
 def btc(bar):
     if bar in btc_cache: return btc_cache[bar]
@@ -415,8 +418,9 @@ def normal(d, tf, sym, st):
             if wall_dist is not None and wall_dist < 0.5 * a: rec_shadow(st, sym, tf, side, typ, p, sl, tp, ["贴脸铁板"], d, int(s))
             else: out.append({"sym": sym, "tf": tf, "dir": side, "type": typ, "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr})
 
-    for side, cond, disc in [("LONG", p > e120 and p > e20 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
-                             ("SHORT", p < e120 and p < e20 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
+    # 【方法二已实装】
+    for side, cond, disc in [("LONG", p > e20 and e20 > e120 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
+                             ("SHORT", p < e20 and e20 < e120 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
         if cond:
             sl_c = calc_sl_struct(d, tf, p, side, a)
             if sl_c is not None:
