@@ -164,7 +164,15 @@ def h4_filter(sym):
     a4 = atr(d4).iloc[-1]
     if pd.isna(a4) or a4 <= 0: return 0
     o, c, amp = d4.o.iloc[-1], d4.c.iloc[-1], d4.h.iloc[-1] - d4.l.iloc[-1]
-    return (1 if c > o else -1 if c < o else 0) if amp > 1.5 * a4 else 0
+    
+    # 【起飞确认】实体必须大于0.5个ATR，否则方向作废（0）
+    body = abs(c - o)
+    if body < 0.5 * a4:
+        return 0
+        
+    if amp > 1.5 * a4:
+        return 1 if c > o else -1 if c < o else 0
+    return 0
 
 def bars_since(d, ts): return max(int(len(d[d.ts >= ts])) - 1, 0)
 
