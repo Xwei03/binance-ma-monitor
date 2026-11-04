@@ -76,7 +76,6 @@ def candles(sym, bar, n=300):
         d = d[d.ok == "1"].reset_index(drop=True)
         if len(d) < 12: return
         
-        # 修复：4H开盘第一小时看上一根收盘K线；其他时间看正在跑的。其他级别看收盘。
         if bar == "4H":
             if len(d) > 0 and (d.ts.iloc[-1] + 3600000 > int(time.time() * 1000)):
                 d = d.iloc[:-1].reset_index(drop=True)
@@ -95,7 +94,9 @@ def atr(d):
     return pd.concat([d.h - d.l, (d.h - p).abs(), (d.l - p).abs()], axis=1).max(axis=1).rolling(14).mean()
 
 def find_swing_levels(d, tf, p, side, use_close=True, av=None):
-    n_l, n_r, look = 5, (2 if tf == "1H" else 3), (500 if tf == "1H" else 300)
+    n_l, n_r = 5, (2 if tf == "1H" else 3)
+    look = 500 if tf == "1H" else 300 
+    
     arr_h, arr_l, arr_o, arr_c, arr_v = d.h.iloc[-look:-1].values, d.l.iloc[-look:-1].values, d.o.iloc[-look:-1].values, d.c.iloc[-look:-1].values, d.v.iloc[-look:-1].values
     m = len(arr_h)
     if m < n_l + n_r + 1: return []
@@ -108,38 +109,45 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
                 if wick > 2.0 * body and wick > 0.8 * av: continue
             price = arr_h[i]
             hits = int(((arr_h > price - price*0.005) & (arr_h < price + price*0.005)).sum())
-            cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5))
+            cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5, i))
         elif side == "sup" and arr_l[i] <= arr_l[i-n_l:i].min() and arr_l[i] <= arr_l[i+1:i+n_r+1].min() and arr_l[i] < p:
             if use_close and av is not None:
                 wick, body = min(arr_o[i], arr_c[i]) - arr_l[i], abs(arr_c[i] - arr_o[i])
                 if wick > 2.0 * body and wick > 0.8 * av: continue
             price = arr_l[i]
             hits = int(((arr_l > price - price*0.005) & (arr_l < price + price*0.005)).sum())
-            cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5))
+            cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5, i))
+            
     if not cands: return []
     cands.sort(key=lambda x: -x[1])
     used, merged = [False] * len(cands), []
     for i in range(len(cands)):
         if used[i]: continue
-        price, score = cands[i][0], cands[i][1]
-        group, used[i] = [price], True
+        price, score, idx = cands[i][0], cands[i][1], cands[i][2]
+        group, max_idx = [price], idx
+        used[i] = True
         for j in range(i + 1, len(cands)):
             if not used[j] and abs(cands[j][0] - price) / price < 0.003:
                 group.append(cands[j][0]); used[j] = True
-        merged.append((sum(group)/len(group), score))
+                max_idx = max(max_idx, cands[j][2])
+        merged.append((sum(group)/len(group), score, max_idx))
+        
     merged = [x for x in merged if x[1] >= 0.5]
-    merged.sort(key=lambda x: abs(x[0] - p))
-    return [(float(price), float(score)) for price, score in merged]
+    
+    # 【从新到旧】：按时间索引倒序排（索引越大时间越新）
+    merged.sort(key=lambda x: -x[2])
+    
+    return [(float(price), float(score)) for price, score, _ in merged]
 
 def calc_sl_struct(d, tf, p, side, a):
     if side == "LONG":
         sup = find_swing_levels(d, tf, p, "sup", use_close=False)
         if not sup: return p - 2.0 * a
-        return sup[0][0] - a # 直接返回真实结构位，不管多远
+        return sup[0][0] - a 
     else:
         res = find_swing_levels(d, tf, p, "res", use_close=False)
         if not res: return p + 2.0 * a
-        return res[0][0] + a # 直接返回真实结构位，不管多远
+        return res[0][0] + a 
 
 def btc(bar):
     if bar in btc_cache: return btc_cache[bar]
@@ -418,7 +426,6 @@ def normal(d, tf, sym, st):
             if wall_dist is not None and wall_dist < 0.5 * a: rec_shadow(st, sym, tf, side, typ, p, sl, tp, ["贴脸铁板"], d, int(s))
             else: out.append({"sym": sym, "tf": tf, "dir": side, "type": typ, "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr})
 
-    # 【方法二已实装】
     for side, cond, disc in [("LONG", p > e20 and e20 > e120 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
                              ("SHORT", p < e20 and e20 < e120 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
         if cond:
@@ -541,7 +548,7 @@ def scan():
         for s in hits[:MAX_SEND_PER_SCAN]:
             if send_signal(st, s):
                 cnt += 1
-            time.sleep(.3)  # 不管成功失败，都老老实实休眠 0.3 秒防飞书封禁
+            time.sleep(.3) 
             
         save_state(st)
         log(f"[{tf}] hits {len(hits)} sent {cnt}")
