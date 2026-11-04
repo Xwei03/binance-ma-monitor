@@ -26,10 +26,10 @@ MAX_SEND_PER_SCAN, MAX_LIVE, MIN_VOL = 20, 20, 10000000
 CN = {"1H": "1小时", "1D": "1天"}
 DIR = {"LONG": "做多", "SHORT": "做空"}
 TYP = {
-    "PREPARE_L": "左侧埋伏", 
-    "PREPARE_R": "右侧埋伏", 
-    "PREPARE_C": "候选顺势",
-    "TREND": "趋势", 
+    "PREPARE_R": "埋伏确认", 
+    "PREPARE_C": "埋伏候选",
+    "TREND_R": "趋势确认", 
+    "TREND_C": "趋势候选",
     "BREAKOUT": "突破"
 }
 cache, btc_cache, stop, last_req = {}, {}, False, [0.0]
@@ -143,7 +143,6 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     return [(float(price), float(score)) for price, score, _ in merged]
 
 def calc_sl_struct(d, tf, p, side, a):
-    # 右侧/候选/趋势单的通用大结构止损
     if side == "LONG":
         sup = find_swing_levels(d, tf, p, "sup", use_close=False)
         if not sup: return p - 2.0 * a
@@ -246,7 +245,7 @@ def daily_report(st):
     rs = [r for r in st.get("results", []) if r["ts"] >= cut]
     L = ["宝宝巴士🚌上车就赚", "📊 每日统计（警报）"]
     tw, tl, te, tto, tbe = 0, 0, 0, 0, 0
-    combos = [(tf, t, f"{tf}{TYP[t]}") for tf in ("1H", "1D") for t in ("PREPARE_L", "PREPARE_R", "PREPARE_C", "TREND", "BREAKOUT")]
+    combos = [(tf, t, f"{tf}{TYP[t]}") for tf in ("1H", "1D") for t in ("PREPARE_R", "PREPARE_C", "TREND_R", "TREND_C", "BREAKOUT")]
     lv = st.get("live", [])
     
     for tf, typ, lb in combos:
@@ -361,7 +360,7 @@ def prepare(d, tf, sym, st):
         if cands and s >= need:
             price1, _ = cands[0]
             
-            # 1. 右侧确认（PREPARE_R）
+            # 右侧确认（PREPARE_R）
             cd1 = price1 * (disc_l if side=="LONG" else disc_s)
             tp_r = None
             if (cd1 > p and side=="LONG") or (cd1 < p and side=="SHORT"):
@@ -370,7 +369,7 @@ def prepare(d, tf, sym, st):
                     tp_r = cd1
                     out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_R", "score": int(s), "entry": p, "sl": sl, "tp": cd1, "rr": rr_r, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
             
-            # 2. 候选顺势（PREPARE_C） - 如果第一墙不够，看后面的墙
+            # 候选顺势（PREPARE_C）
             if tp_r is None and len(cands) > 1:
                 for price_x, _ in cands[1:]:
                     cdx = price_x * (disc_l if side=="LONG" else disc_s)
@@ -379,30 +378,6 @@ def prepare(d, tf, sym, st):
                         if rr_c >= need_rr:
                             out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_C", "score": int(s), "entry": p, "sl": sl, "tp": cdx, "rr": rr_c, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
                             break 
-            
-            # 3. 左侧顶墙博弈（PREPARE_L） - 贴近墙，用极小止损
-            dist_to_wall = (price1 - p) if side == "LONG" else (p - price1)
-            if 0 < dist_to_wall <= 0.3 * av:
-                if side == "LONG":
-                    sl_l = min(d.l.iloc[-1], d.l.iloc[-2]) - 0.5 * av
-                    risk_l = p - sl_l
-                else:
-                    sl_l = max(d.h.iloc[-1], d.h.iloc[-2]) + 0.5 * av
-                    risk_l = sl_l - p
-                
-                if risk_l > 0:
-                    if len(cands) > 1:
-                        price2, _ = cands[1]
-                        tp_l = price2 * (disc_l if side=="LONG" else disc_s)
-                        if (tp_l > price1 and side=="LONG") or (tp_l < price1 and side=="SHORT"):
-                            rr_l = (tp_l - p) / risk_l if side == "LONG" else (p - tp_l) / risk_l
-                            if rr_l >= need_rr:
-                                out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_L", "score": int(s), "entry": p, "sl": sl_l, "tp": tp_l, "rr": rr_l, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
-                    else:
-                        tp_l = p + (2.0 * risk_l) if side == "LONG" else p - (2.0 * risk_l)
-                        rr_l = (tp_l - p) / risk_l if side == "LONG" else (p - tp_l) / risk_l
-                        if rr_l >= need_rr:
-                            out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_L", "score": int(s), "entry": p, "sl": sl_l, "tp": tp_l, "rr": rr_l, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
                         
         elif not has_wall and s >= need:
             tp = p + (2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p - (2.0 if tf!="1H" else 2.2)*risk
@@ -432,7 +407,7 @@ def normal(d, tf, sym, st):
         if sl == p or tp == p: return
         rr = (tp - p) / (p - sl) if side == "LONG" else (p - tp) / (sl - p)
         if rr <= 0: return
-        v = (5 if vr >= 5 else 15 if vr >= 4 else 25 if vr >= 2.5 else 30 if vr >= 1.5 else 15 if vr >= 1.0 else 5) if typ == "TREND" else (30 if 2 <= vr < 2.5 else 25 if 2.5 <= vr < 3 else 15 if vr >= 3 else 20 if vr >= 1.5 else 10 if vr >= 1.2 else 0)
+        v = (5 if vr >= 5 else 15 if vr >= 4 else 25 if vr >= 2.5 else 30 if vr >= 1.5 else 15 if vr >= 1.0 else 5) if "TREND" in typ else (30 if 2 <= vr < 2.5 else 25 if 2.5 <= vr < 3 else 15 if vr >= 3 else 20 if vr >= 1.5 else 10 if vr >= 1.2 else 0)
         s = v + (25 if body >= .6 else 12 if body >= .45 else 0) + (20 if a > aa * 1.05 else 0) + (6 if bs == 0 else min(max(bs if side == "LONG" else -bs, 0), 15))
         if (side == "LONG" and p > e20) or (side == "SHORT" and p < e20): s += 10
         if rr >= need_rr and s >= TF[tf][2]:
@@ -446,17 +421,30 @@ def normal(d, tf, sym, st):
                 risk = (p - sl_c) if side == "LONG" else (sl_c - p)
                 if risk > 0:
                     cands = find_swing_levels(d, tf, p, "res" if side == "LONG" else "sup", use_close=True, av=a)
-                    tp_c = None
+                    has_wall = bool(cands)
+                    
+                    # 趋势确认（TREND_R）
+                    tp_r = None
                     if cands:
-                        price, _ = cands[0]
-                        tp_temp = min(price * disc, p + 5 * a) if side == "LONG" else max(price * disc, p - 5 * a)
+                        price1, _ = cands[0]
+                        tp_temp = min(price1 * disc, p + 5 * a) if side == "LONG" else max(price1 * disc, p - 5 * a)
                         if (tp_temp > p and side == "LONG") or (tp_temp < p and side == "SHORT"):
                             if (tp_temp - p if side == "LONG" else p - tp_temp) / risk >= 1.5:
-                                tp_c = tp_temp
-                        if tp_c is not None: add(side, "TREND", sl_c, tp_c, 1.5)
-                    else:
+                                tp_r = tp_temp
+                                add(side, "TREND_R", sl_c, tp_r, 1.5)
+                    
+                    # 趋势候选（TREND_C）
+                    if tp_r is None and len(cands) > 1:
+                        for price_x, _ in cands[1:]:
+                            tp_temp = min(price_x * disc, p + 5 * a) if side == "LONG" else max(price_x * disc, p - 5 * a)
+                            if (tp_temp > p and side == "LONG") or (tp_temp < p and side == "SHORT"):
+                                if (tp_temp - p if side == "LONG" else p - tp_temp) / risk >= 1.5:
+                                    add(side, "TREND_C", sl_c, tp_temp, 1.5)
+                                    break
+                                    
+                    if not has_wall:
                         tp_c = p + 5 * a if side == "LONG" else p - 5 * a
-                        add(side, "TREND", sl_c, tp_c, 1.5)
+                        add(side, "TREND_R", sl_c, tp_c, 1.5)
 
     hi, lo = d.h.iloc[-12:-2].max(), d.l.iloc[-12:-2].min()
     real_body = abs(p - d.o.iloc[-1]); real_body_safe = max(real_body, a * 0.01)
