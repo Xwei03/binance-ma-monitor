@@ -25,7 +25,13 @@ MAX_SEND_PER_SCAN, MAX_LIVE, MIN_VOL = 20, 20, 10000000
 
 CN = {"1H": "1小时", "1D": "1天"}
 DIR = {"LONG": "做多", "SHORT": "做空"}
-TYP = {"PREPARE": "启动前埋伏", "TREND": "趋势", "BREAKOUT": "突破"}
+TYP = {
+    "PREPARE_L": "左侧埋伏", 
+    "PREPARE_R": "右侧埋伏", 
+    "PREPARE_C": "候选顺势",
+    "TREND": "趋势", 
+    "BREAKOUT": "突破"
+}
 cache, btc_cache, stop, last_req = {}, {}, False, [0.0]
 
 def hdr(): return {"User-Agent": random.choice(UAS), "Accept": "application/json", "Referer": "https://www.okx.com/"}
@@ -137,6 +143,7 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     return [(float(price), float(score)) for price, score, _ in merged]
 
 def calc_sl_struct(d, tf, p, side, a):
+    # 右侧/候选/趋势单的通用大结构止损
     if side == "LONG":
         sup = find_swing_levels(d, tf, p, "sup", use_close=False)
         if not sup: return p - 2.0 * a
@@ -239,7 +246,7 @@ def daily_report(st):
     rs = [r for r in st.get("results", []) if r["ts"] >= cut]
     L = ["宝宝巴士🚌上车就赚", "📊 每日统计（警报）"]
     tw, tl, te, tto, tbe = 0, 0, 0, 0, 0
-    combos = [(tf, t, f"{tf}{TYP[t]}") for tf in ("1H", "1D") for t in ("PREPARE", "TREND", "BREAKOUT")]
+    combos = [(tf, t, f"{tf}{TYP[t]}") for tf in ("1H", "1D") for t in ("PREPARE_L", "PREPARE_R", "PREPARE_C", "TREND", "BREAKOUT")]
     lv = st.get("live", [])
     
     for tf, typ, lb in combos:
@@ -349,21 +356,60 @@ def prepare(d, tf, sym, st):
         if risk <= 0: continue
         
         cands = find_swing_levels(d, tf, p, "res" if side=="LONG" else "sup", use_close=True, av=av)
-        tp, has_wall = None, bool(cands)
+        has_wall = bool(cands)
         
-        if cands:
-            price, _ = cands[0]
-            cd = price * (disc_l if side=="LONG" else disc_s)
-            if (cd > p and side=="LONG") or (cd < p and side=="SHORT"):
-                if (cd - p if side=="LONG" else p - cd) / risk >= need_rr:
-                    tp = cd
-                    
-        if tp is None:
-            if has_wall: continue
+        if cands and s >= need:
+            price1, _ = cands[0]
+            
+            # 1. 右侧确认（PREPARE_R）
+            cd1 = price1 * (disc_l if side=="LONG" else disc_s)
+            tp_r = None
+            if (cd1 > p and side=="LONG") or (cd1 < p and side=="SHORT"):
+                rr_r = (cd1 - p) / risk if side == "LONG" else (p - cd1) / risk
+                if rr_r >= need_rr:
+                    tp_r = cd1
+                    out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_R", "score": int(s), "entry": p, "sl": sl, "tp": cd1, "rr": rr_r, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
+            
+            # 2. 候选顺势（PREPARE_C） - 如果第一墙不够，看后面的墙
+            if tp_r is None and len(cands) > 1:
+                for price_x, _ in cands[1:]:
+                    cdx = price_x * (disc_l if side=="LONG" else disc_s)
+                    if (cdx > p and side=="LONG") or (cdx < p and side=="SHORT"):
+                        rr_c = (cdx - p) / risk if side == "LONG" else (p - cdx) / risk
+                        if rr_c >= need_rr:
+                            out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_C", "score": int(s), "entry": p, "sl": sl, "tp": cdx, "rr": rr_c, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
+                            break 
+            
+            # 3. 左侧顶墙博弈（PREPARE_L） - 贴近墙，用极小止损
+            dist_to_wall = (price1 - p) if side == "LONG" else (p - price1)
+            if 0 < dist_to_wall <= 0.3 * av:
+                if side == "LONG":
+                    sl_l = min(d.l.iloc[-1], d.l.iloc[-2]) - 0.5 * av
+                    risk_l = p - sl_l
+                else:
+                    sl_l = max(d.h.iloc[-1], d.h.iloc[-2]) + 0.5 * av
+                    risk_l = sl_l - p
+                
+                if risk_l > 0:
+                    if len(cands) > 1:
+                        price2, _ = cands[1]
+                        tp_l = price2 * (disc_l if side=="LONG" else disc_s)
+                        if (tp_l > price1 and side=="LONG") or (tp_l < price1 and side=="SHORT"):
+                            rr_l = (tp_l - p) / risk_l if side == "LONG" else (p - tp_l) / risk_l
+                            if rr_l >= need_rr:
+                                out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_L", "score": int(s), "entry": p, "sl": sl_l, "tp": tp_l, "rr": rr_l, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
+                    else:
+                        tp_l = p + (2.0 * risk_l) if side == "LONG" else p - (2.0 * risk_l)
+                        rr_l = (tp_l - p) / risk_l if side == "LONG" else (p - tp_l) / risk_l
+                        if rr_l >= need_rr:
+                            out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_L", "score": int(s), "entry": p, "sl": sl_l, "tp": tp_l, "rr": rr_l, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
+                        
+        elif not has_wall and s >= need:
             tp = p + (2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p - (2.0 if tf!="1H" else 2.2)*risk
-        
-        rr = (tp - p) / risk if side == "LONG" else (p - tp) / risk
-        if s >= need and rr >= need_rr: out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE", "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
+            rr = (tp - p) / risk if side == "LONG" else (p - tp) / risk
+            if rr >= need_rr:
+                out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_R", "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
+            
     return max(out, key=lambda x: x["score"]) if out else None
 
 def normal(d, tf, sym, st):
@@ -431,9 +477,8 @@ def signal(d, tf, sym, st):
     return p or n
 
 def send_signal(st, s):
-    t = "🟡 启动前埋伏" if s["type"]=="PREPARE" else "🟢 突破启动" if s["type"]=="BREAKOUT" else "🔵 趋势信号"
-    stt = "贴均线埋伏" if (s["type"]=="PREPARE" and s["tf"]=="1H") else "启动前埋伏" if s["type"]=="PREPARE" else "突破已站稳" if s["type"]=="BREAKOUT" else "趋势跟随"
-    txt = f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{stt}\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
+    t = TYP[s["type"]]
+    txt = f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
     if post(txt):
         key = sdk(s["sym"], s["tf"], s["dir"], s["type"])
         st.setdefault("sent", {})[key] = int(s["sent_ts"])
