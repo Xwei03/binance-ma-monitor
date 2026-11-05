@@ -25,9 +25,12 @@ MAX_SEND_PER_SCAN, MAX_LIVE, MIN_VOL = 20, 20, 10000000
 
 CN = {"1H": "1小时", "1D": "1天"}
 DIR = {"LONG": "做多", "SHORT": "做空"}
+# 【修复点1】加入 PREPARE 和 TREND 的兼容，防止历史数据 KeyError
 TYP = {
+    "PREPARE": "旧埋伏",
     "PREPARE_R": "埋伏确认", 
     "PREPARE_C": "埋伏候选",
+    "TREND": "旧趋势",
     "TREND_R": "趋势确认", 
     "TREND_C": "趋势候选",
     "BREAKOUT": "突破"
@@ -271,7 +274,9 @@ def daily_report(st):
             for r in sub_list:
                 t_str = datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000, BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
                 tail = f"扫损{datetime.fromtimestamp(r['rec_ts']/1000,BJ_TZ).strftime('%m-%d %H:%M')}" if r["result"]=="LOSS" and r.get("rec_ts") else (f"超时{datetime.fromtimestamp(r['rec_ts']/1000,BJ_TZ).strftime('%m-%d %H:%M')}" if r["result"]=="TIMEOUT" and r.get("rec_ts") else "")
-                L.append(f"  {r['tf']}{TYP[r['type']]} {r['sym'].replace('-USDT-SWAP','')} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} {tail}")
+                # 【修复点2】安全获取字典值
+                type_cn = TYP.get(r['type'], r['type'])
+                L.append(f"  {r['tf']}{type_cn} {r['sym'].replace('-USDT-SWAP','')} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} {tail}")
             
     live_rows = []
     for s in lv:
@@ -289,7 +294,9 @@ def daily_report(st):
         L.append(f"\n📋 在追明细（{len(live_rows)}条，按止盈进度降序）：")
         for s, pct in live_rows:
             t_str = datetime.fromtimestamp((s.get("alert_ts") or s.get("sent_ts"))/1000, BJ_TZ).strftime("%m-%d %H:%M") if (s.get("alert_ts") or s.get("sent_ts")) else ""
-            L.append(f"  {s['tf']}{TYP[s['type']]} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 分数{s.get('score',0)} 入场{s.get('entry',0):.8g} 止损{s.get('sl',0):.8g}{'(已通知保本)' if s.get('be_sent') else ''} 止盈{s.get('tp',0):.8g} 进度{pct*100:.0f}% 开仓{t_str}")
+            # 【修复点3】安全获取字典值
+            type_cn = TYP.get(s['type'], s['type'])
+            L.append(f"  {s['tf']}{type_cn} {s['sym'].replace('-USDT-SWAP','')} {DIR[s['dir']]} 分数{s.get('score',0)} 入场{s.get('entry',0):.8g} 止损{s.get('sl',0):.8g}{'(已通知保本)' if s.get('be_sent') else ''} 止盈{s.get('tp',0):.8g} 进度{pct*100:.0f}% 开仓{t_str}")
             
     if post_long(L): st["last_report"] = today; log("DAILY_REPORT", tw, tl, te, tto, len(lv))
 
@@ -359,8 +366,6 @@ def prepare(d, tf, sym, st):
         
         if cands and s >= need:
             price1, _ = cands[0]
-            
-            # 右侧确认（PREPARE_R）
             cd1 = price1 * (disc_l if side=="LONG" else disc_s)
             tp_r = None
             if (cd1 > p and side=="LONG") or (cd1 < p and side=="SHORT"):
@@ -369,7 +374,6 @@ def prepare(d, tf, sym, st):
                     tp_r = cd1
                     out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_R", "score": int(s), "entry": p, "sl": sl, "tp": cd1, "rr": rr_r, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0})
             
-            # 候选顺势（PREPARE_C）
             if tp_r is None and len(cands) > 1:
                 for price_x, _ in cands[1:]:
                     cdx = price_x * (disc_l if side=="LONG" else disc_s)
@@ -423,7 +427,6 @@ def normal(d, tf, sym, st):
                     cands = find_swing_levels(d, tf, p, "res" if side == "LONG" else "sup", use_close=True, av=a)
                     has_wall = bool(cands)
                     
-                    # 趋势确认（TREND_R）
                     tp_r = None
                     if cands:
                         price1, _ = cands[0]
@@ -433,7 +436,6 @@ def normal(d, tf, sym, st):
                                 tp_r = tp_temp
                                 add(side, "TREND_R", sl_c, tp_r, 1.5)
                     
-                    # 趋势候选（TREND_C）
                     if tp_r is None and len(cands) > 1:
                         for price_x, _ in cands[1:]:
                             tp_temp = min(price_x * disc, p + 5 * a) if side == "LONG" else max(price_x * disc, p - 5 * a)
@@ -465,8 +467,9 @@ def signal(d, tf, sym, st):
     return p or n
 
 def send_signal(st, s):
-    t = TYP[s["type"]]
-    txt = f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n{DIR[s['dir']]}  {TYP[s['type']]}  分数{s['score']}  盈亏比{s['rr']:.2f}\n入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
+    # 【修复点4】安全获取字典值
+    t = TYP.get(s["type"], s["type"])
+    txt = f"宝宝巴士🚌上车就赚\n🚨 警报 {t}  {CN[s['tf']]}  {s['sym']}\n{DIR[s['dir']]}  {TYP.get(s['type'], s['type'])}  分数{s['score']}  盈亏比{s['rr']:.2f}\n入场{s['entry']:.8g}  止损{s['sl']:.8g}  止盈{s['tp']:.8g}\n{now_bj().strftime('%Y-%m-%d %H:%M:%S')}"
     if post(txt):
         key = sdk(s["sym"], s["tf"], s["dir"], s["type"])
         st.setdefault("sent", {})[key] = int(s["sent_ts"])
