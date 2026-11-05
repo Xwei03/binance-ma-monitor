@@ -274,7 +274,7 @@ def daily_report(st):
     L.append(f"警报 统计时间：{now_bj().strftime('%Y-%m-%d %H:%M:%S')}")
 
     if sh or st.get("shadow"):
-        L.append(f"\n👻 影子单（防偏科测试组）")
+        L.append(f"\n👻 影子单（防偏科测试组：只记录不偏科的单子）")
         groups = {}
         for r in sh:
             for reason in r.get("reasons", ["?"]): groups.setdefault(reason, []).append(r)
@@ -562,20 +562,25 @@ def scan():
             try:
                 dd = candles(sym, bar, n)
                 s = signal(dd, tf, sym, st)
-                if not s or too_soon(st, s["sym"], tf, s["dir"], s["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s["sym"] and lv.get("tf")==tf for lv in st.get("live", [])): continue
-                key = sdk(s["sym"], tf, s["dir"], s["type"])
-                if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
-                s["sent_ts"] = int(dd.ts.iloc[-1]); hits.append(s)
                 
-                # 实盘照样发单，不管偏不偏科。
-                # 影子单：如果该单不偏科（有量），说明防偏科机制也会认可它，影子单也复制一份一模一样的。
-                vr = s.get("vr", 1.0)
-                is_pianke = False
-                if "PREPARE" in s["type"] and vr < 0.6: is_pianke = True
-                elif ("TREND" in s["type"] or "BREAKOUT" in s["type"]) and vr < 1.0: is_pianke = True
-                
-                if not is_pianke:
-                    rec_shadow(st, sym, tf, s["dir"], s["type"], s["entry"], s["sl"], s["tp"], ["防偏科"], dd, s["score"])
+                if s:
+                    if too_soon(st, s["sym"], tf, s["dir"], s["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s["sym"] and lv.get("tf")==tf for lv in st.get("live", [])): continue
+                    key = sdk(s["sym"], tf, s["dir"], s["type"])
+                    if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
+                    
+                    s["sent_ts"] = int(dd.ts.iloc[-1])
+                    hits.append(s) # 放进实盘池，实盘不管偏不偏科，照发！
+
+                    # ================= 影子单防偏科验证逻辑 =================
+                    vr = s.get("vr", 1.0)
+                    is_pianke = False
+                    if "PREPARE" in s["type"] and vr < 0.6: is_pianke = True
+                    elif ("TREND" in s["type"] or "BREAKOUT" in s["type"]) and vr < 1.0: is_pianke = True
+                    
+                    # 如果不偏科，说明防偏科策略也会发这单，因此影子单复制一份来跑
+                    if not is_pianke:
+                        rec_shadow(st, sym, tf, s["dir"], s["type"], s["entry"], s["sl"], s["tp"], ["防偏科"], dd, s["score"])
+                    # =======================================================
 
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
