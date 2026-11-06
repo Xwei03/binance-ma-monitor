@@ -101,7 +101,8 @@ def atr(d):
 
 def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     n_l, n_r = 5, (2 if tf == "1H" else 3)
-    look = 500 if tf == "1H" else 300 
+    # 【改动】1天的回溯周期改成 90 根
+    look = 500 if tf == "1H" else 90 
     
     arr_h, arr_l, arr_o, arr_c, arr_v = d.h.iloc[-look:-1].values, d.l.iloc[-look:-1].values, d.o.iloc[-look:-1].values, d.c.iloc[-look:-1].values, d.v.iloc[-look:-1].values
     m = len(arr_h)
@@ -361,7 +362,6 @@ def prepare(d, tf, sym, st):
     disc_l, disc_s = (0.985 if tf == "1H" else 0.97), (1.015 if tf == "1H" else 1.03)
 
     for side in ("LONG", "SHORT"):
-        # 【改动】埋伏单彻底删除了对120均线的限制，完全不管120了
         if (side == "LONG" and p <= d.o.iloc[-1]) or (side == "SHORT" and p >= d.o.iloc[-1]): continue
         if (side == "LONG" and h4_bias == -1) or (side == "SHORT" and h4_bias == 1): continue
 
@@ -443,7 +443,6 @@ def normal(d, tf, sym, st):
         if rr >= need_rr and s >= TF[tf][2]:
             out.append({"sym": sym, "tf": tf, "dir": side, "type": typ, "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr, "vr": vr})
 
-    # 【改动】趋势单恢复老规矩：p > 20 且 p > 120 且 20 > 60
     for side, cond, disc in [("LONG", p > e20 and p > e120 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
                              ("SHORT", p < e20 and p < e120 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
         if cond:
@@ -569,7 +568,7 @@ def scan():
                     if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
                     
                     s["sent_ts"] = int(dd.ts.iloc[-1])
-                    hits.append(s) # 放进实盘池，实盘不管偏不偏科，照发！
+                    hits.append(s) # 放进实盘池
 
                     # ================= 影子单防偏科验证逻辑 =================
                     vr = s.get("vr", 1.0)
