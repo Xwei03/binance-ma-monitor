@@ -361,8 +361,7 @@ def prepare(d, tf, sym, st):
     disc_l, disc_s = (0.985 if tf == "1H" else 0.97), (1.015 if tf == "1H" else 1.03)
 
     for side in ("LONG", "SHORT"):
-        if side == "LONG" and p < e120.iloc[-1] and e120.iloc[-1] < e120.iloc[-4]: continue
-        if side == "SHORT" and p > e120.iloc[-1] and e120.iloc[-1] > e120.iloc[-4]: continue
+        # 【改动】埋伏单彻底删除了对120均线的限制，完全不管120了
         if (side == "LONG" and p <= d.o.iloc[-1]) or (side == "SHORT" and p >= d.o.iloc[-1]): continue
         if (side == "LONG" and h4_bias == -1) or (side == "SHORT" and h4_bias == 1): continue
 
@@ -444,8 +443,9 @@ def normal(d, tf, sym, st):
         if rr >= need_rr and s >= TF[tf][2]:
             out.append({"sym": sym, "tf": tf, "dir": side, "type": typ, "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr, "vr": vr})
 
-    for side, cond, disc in [("LONG", p > e20 and e20 > e120 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
-                             ("SHORT", p < e20 and e20 < e120 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
+    # 【改动】趋势单恢复老规矩：p > 20 且 p > 120 且 20 > 60
+    for side, cond, disc in [("LONG", p > e20 and p > e120 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
+                             ("SHORT", p < e20 and p < e120 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
         if cond:
             sl_c = calc_sl_struct(d, tf, p, side, a)
             if sl_c is not None:
@@ -577,7 +577,6 @@ def scan():
                     if "PREPARE" in s["type"] and vr < 0.6: is_pianke = True
                     elif ("TREND" in s["type"] or "BREAKOUT" in s["type"]) and vr < 1.0: is_pianke = True
                     
-                    # 如果不偏科，说明防偏科策略也会发这单，因此影子单复制一份来跑
                     if not is_pianke:
                         rec_shadow(st, sym, tf, s["dir"], s["type"], s["entry"], s["sl"], s["tp"], ["防偏科"], dd, s["score"])
                     # =======================================================
