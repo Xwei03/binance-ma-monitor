@@ -101,7 +101,6 @@ def atr(d):
 
 def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     n_l, n_r = 5, (2 if tf == "1H" else 3)
-    # 【改动】1天的回溯周期改成 90 根
     look = 500 if tf == "1H" else 90 
     
     arr_h, arr_l, arr_o, arr_c, arr_v = d.h.iloc[-look:-1].values, d.l.iloc[-look:-1].values, d.o.iloc[-look:-1].values, d.c.iloc[-look:-1].values, d.v.iloc[-look:-1].values
@@ -111,6 +110,7 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     cands = []
     for i in range(n_l, m - n_r):
         if side == "res" and arr_h[i] >= arr_h[i-n_l:i].max() and arr_h[i] >= arr_h[i+1:i+n_r+1].max() and arr_h[i] > p:
+            if arr_c[i+1:].max() > arr_h[i]: continue
             if use_close and av is not None:
                 wick, body = arr_h[i] - max(arr_o[i], arr_c[i]), abs(arr_c[i] - arr_o[i])
                 if wick > 2.0 * body and wick > 0.8 * av: continue
@@ -118,6 +118,7 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
             hits = int(((arr_h > price - price*0.005) & (arr_h < price + price*0.005)).sum())
             cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5, i))
         elif side == "sup" and arr_l[i] <= arr_l[i-n_l:i].min() and arr_l[i] <= arr_l[i+1:i+n_r+1].min() and arr_l[i] < p:
+            if arr_c[i+1:].min() < arr_l[i]: continue
             if use_close and av is not None:
                 wick, body = min(arr_o[i], arr_c[i]) - arr_l[i], abs(arr_c[i] - arr_o[i])
                 if wick > 2.0 * body and wick > 0.8 * av: continue
@@ -568,9 +569,8 @@ def scan():
                     if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
                     
                     s["sent_ts"] = int(dd.ts.iloc[-1])
-                    hits.append(s) # 放进实盘池
+                    hits.append(s)
 
-                    # ================= 影子单防偏科验证逻辑 =================
                     vr = s.get("vr", 1.0)
                     is_pianke = False
                     if "PREPARE" in s["type"] and vr < 0.6: is_pianke = True
@@ -578,7 +578,6 @@ def scan():
                     
                     if not is_pianke:
                         rec_shadow(st, sym, tf, s["dir"], s["type"], s["entry"], s["sl"], s["tp"], ["防偏科"], dd, s["score"])
-                    # =======================================================
 
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
