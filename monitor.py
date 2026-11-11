@@ -583,27 +583,28 @@ def scan():
                 # 1. 实盘系统：用历史墙
                 s_live = signal(dd, tf, sym, st, sl_type="wall")
                 if s_live:
-                    if too_soon(st, s_live["sym"], tf, s_live["dir"], s_live["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s_live["sym"] and lv.get("tf")==tf for lv in st.get("live", [])): continue
-                    key = sdk(s_live["sym"], tf, s_live["dir"], s_live["type"])
-                    if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
-                    
-                    s_live["sent_ts"] = int(dd.ts.iloc[-1])
-                    hits.append(s_live)
-                    
-                    vr = s_live.get("vr", 1.0)
-                    is_pianke = False
-                    if "PREPARE" in s_live["type"] and vr < 0.6: is_pianke = True
-                    elif ("TREND" in s_live["type"] or "BREAKOUT" in s_live["type"]) and vr < 1.0: is_pianke = True
-                    
-                    # 防偏科影子单：用实盘历史墙
-                    if not is_pianke:
-                        rec_shadow(st, sym, tf, s_live["dir"], s_live["type"], s_live["entry"], s_live["sl"], s_live["tp"], ["防偏科"], dd, s_live["score"])
+                    if not (too_soon(st, s_live["sym"], tf, s_live["dir"], s_live["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s_live["sym"] and lv.get("tf")==tf for lv in st.get("live", []))):
+                        key = sdk(s_live["sym"], tf, s_live["dir"], s_live["type"])
+                        if not (key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS):
+                            s_live["sent_ts"] = int(dd.ts.iloc[-1])
+                            hits.append(s_live)
+                            
+                            vr = s_live.get("vr", 1.0)
+                            is_pianke = False
+                            if "PREPARE" in s_live["type"] and vr < 0.6: is_pianke = True
+                            elif ("TREND" in s_live["type"] or "BREAKOUT" in s_live["type"]) and vr < 1.0: is_pianke = True
+                            
+                            if not is_pianke:
+                                rec_shadow(st, sym, tf, s_live["dir"], s_live["type"], s_live["entry"], s_live["sl"], s_live["tp"], ["防偏科"], dd, s_live["score"])
 
-                # 2. 影子系统：用两K止损，独立跑
+                # 2. 影子系统：用两K止损，独立跑，条件跟实盘一样
                 s_shadow = signal(dd, tf, sym, st, sl_type="2k")
                 if s_shadow:
-                    s_shadow["sent_ts"] = int(dd.ts.iloc[-1])
-                    rec_shadow(st, sym, tf, s_shadow["dir"], s_shadow["type"], s_shadow["entry"], s_shadow["sl"], s_shadow["tp"], ["两K止损"], dd, s_shadow["score"])
+                    if not (too_soon(st, s_shadow["sym"], tf, s_shadow["dir"], s_shadow["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s_shadow["sym"] and lv.get("tf")==tf for lv in st.get("live", []))):
+                        key = sdk(s_shadow["sym"], tf, s_shadow["dir"], s_shadow["type"])
+                        if not (key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS):
+                            s_shadow["sent_ts"] = int(dd.ts.iloc[-1])
+                            rec_shadow(st, sym, tf, s_shadow["dir"], s_shadow["type"], s_shadow["entry"], s_shadow["sl"], s_shadow["tp"], ["两K止损"], dd, s_shadow["score"])
 
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
