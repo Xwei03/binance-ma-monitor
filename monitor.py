@@ -388,7 +388,7 @@ def prepare(d, tf, sym, st):
         risk = (p - sl) if side == "LONG" else (sl - p)
         if risk <= 0: continue
         
-        cands = find_swing_levels(d, tf, p, "res" if side=="LONG" else "sup", use_close=True, av=av)
+        cands = find_swing_levels(d, tf, p, "res" if side=="LONG" else "sup", use_close=False, av=av)
         has_wall = bool(cands)
         
         if cands and s >= need:
@@ -451,7 +451,7 @@ def normal(d, tf, sym, st):
             if sl_c is not None:
                 risk = (p - sl_c) if side == "LONG" else (sl_c - p)
                 if risk > 0:
-                    cands = find_swing_levels(d, tf, p, "res" if side == "LONG" else "sup", use_close=True, av=a)
+                    cands = find_swing_levels(d, tf, p, "res" if side == "LONG" else "sup", use_close=False, av=a)
                     has_wall = bool(cands)
                     
                     tp_r = None
