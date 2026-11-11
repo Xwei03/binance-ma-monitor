@@ -144,15 +144,18 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     merged.sort(key=lambda x: -x[2])
     return [(float(price), float(score)) for price, score, _ in merged]
 
-def calc_sl_struct(d, tf, p, side, a):
-    if side == "LONG":
-        sup = find_swing_levels(d, tf, p, "sup", use_close=False)
-        if not sup: return p - 2.0 * a
-        return sup[0][0] - a 
+def calc_sl(d, tf, p, side, a, sl_type="wall"):
+    if sl_type == "2k":
+        return min(d.l.iloc[-1], d.l.iloc[-2]) - a if side == "LONG" else max(d.h.iloc[-1], d.h.iloc[-2]) + a
     else:
-        res = find_swing_levels(d, tf, p, "res", use_close=False)
-        if not res: return p + 2.0 * a
-        return res[0][0] + a 
+        if side == "LONG":
+            sup = find_swing_levels(d, tf, p, "sup", use_close=False)
+            if not sup: return p - 2.0 * a
+            return sup[0][0] - a 
+        else:
+            res = find_swing_levels(d, tf, p, "res", use_close=False)
+            if not res: return p + 2.0 * a
+            return res[0][0] + a 
 
 def btc(bar):
     if bar in btc_cache: return btc_cache[bar]
@@ -200,12 +203,14 @@ def too_soon(st, sym, tf, side, typ, d, bars):
 def mark(st, sym, tf, side, typ, d, where="sent"):
     st.setdefault(where, {})[sdk(sym, tf, side, typ)] = int(d.ts.iloc[-1])
 
-def rec(st, s, r, mfe=None, mfe_pct=None):
+def rec(st, s, r, mfe=None, mfe_pct=None, mae=None, mae_pct=None):
     e = {"sym": s["sym"], "tf": s["tf"], "dir": s["dir"], "type": s["type"], "result": r, "ts": int(time.time()), "rec_ts": int(time.time()*1000), "score": s.get("score", 0)}
     for k_src, k_dst in [("alert_ts", "alert_ts"), ("sent_ts", "sig_ts"), ("entry", "entry"), ("sl", "sl"), ("tp", "tp")]:
         if s.get(k_src): e[k_dst] = float(s[k_src]) if "entry" in k_src or "sl" in k_src or "tp" in k_src else int(s[k_src])
     if mfe is not None: e["mfe"] = round(float(mfe) * 100, 2)
     if mfe_pct is not None: e["mfe_pct"] = round(min(float(mfe_pct), 1.0) * 100, 1)
+    if mae is not None: e["mae"] = round(float(mae) * 100, 2)
+    if mae_pct is not None: e["mae_pct"] = round(min(float(mae_pct), 1.0) * 100, 1)
     st.setdefault("results", []).append(e)
 
 def rec_shadow(st, sym, tf, side, typ, p, sl, tp, reasons, d, score):
@@ -307,7 +312,8 @@ def daily_report(st):
             for r in sub_list:
                 t_str = datetime.fromtimestamp((r.get("alert_ts") or r.get("sig_ts"))/1000, BJ_TZ).strftime("%m-%d %H:%M") if (r.get("alert_ts") or r.get("sig_ts")) else ""
                 tail = f"扫损{datetime.fromtimestamp(r['rec_ts']/1000,BJ_TZ).strftime('%m-%d %H:%M')}" if r["result"]=="LOSS" and r.get("rec_ts") else (f"超时{datetime.fromtimestamp(r['rec_ts']/1000,BJ_TZ).strftime('%m-%d %H:%M')}" if r["result"]=="TIMEOUT" and r.get("rec_ts") else "")
-                L.append(f"  {r['tf']}{TYP.get(r['type'],r['type'])} {r['sym'].replace('-USDT-SWAP','')} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}% 开仓{t_str} {tail}")
+                mae_str = f" 险情{r.get('mae_pct',0):.0f}%" if "mae_pct" in r else ""
+                L.append(f"  {r['tf']}{TYP.get(r['type'],r['type'])} {r['sym'].replace('-USDT-SWAP','')} {DIR.get(r.get('dir',''),'?')} 分数{r.get('score',0)} 入场{r.get('entry',0):.8g} 止损{r.get('sl',0):.8g} 止盈{r.get('tp',0):.8g} MFE={r['mfe']}% 进度{r.get('mfe_pct',0):.0f}%{mae_str} 开仓{t_str} {tail}")
             
     live_rows = []
     for s in lv:
@@ -348,7 +354,7 @@ def resolve(sym, side, sl, tp, ts0, ts1, tf):
         if r in ("WIN", "LOSS"): return r
     return "UNKNOWN"
 
-def prepare(d, tf, sym, st):
+def prepare(d, tf, sym, st, sl_type="wall"):
     if d is None or len(d) < 210: return
     p = d.c.iloc[-1]
     a = atr(d); av = a.iloc[-1]; base = a.iloc[-21:-1].mean()
@@ -382,7 +388,7 @@ def prepare(d, tf, sym, st):
         s += 5 if (body < .35 and ar <= 1) else 3 if body < .45 else 0
 
         need, need_rr = (73 if tf == "1H" else 72), (1.5 if tf == "1H" else 2.0)
-        sl = calc_sl_struct(d, tf, p, side, av)
+        sl = calc_sl(d, tf, p, side, av, sl_type)
         if sl is None: continue
         
         risk = (p - sl) if side == "LONG" else (sl - p)
@@ -418,7 +424,7 @@ def prepare(d, tf, sym, st):
             
     return max(out, key=lambda x: x["score"]) if out else None
 
-def normal(d, tf, sym, st):
+def normal(d, tf, sym, st, sl_type="wall"):
     if d is None or len(d) < 210: return
     p = d.c.iloc[-1]
     e20s, e60s, e120s = ema(d.c, 20), ema(d.c, 60), ema(d.c, 120)
@@ -447,7 +453,7 @@ def normal(d, tf, sym, st):
     for side, cond, disc in [("LONG", p > e20 and p > e120 and e20 > e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] > e20s.iloc[-4] and (p - e20)/p < gap_max, disc_l),
                              ("SHORT", p < e20 and p < e120 and e20 < e60 and abs(e20-e60) >= 0.1*a and e20s.iloc[-1] < e20s.iloc[-4] and (e20 - p)/p < gap_max, disc_s)]:
         if cond:
-            sl_c = calc_sl_struct(d, tf, p, side, a)
+            sl_c = calc_sl(d, tf, p, side, a, sl_type)
             if sl_c is not None:
                 risk = (p - sl_c) if side == "LONG" else (sl_c - p)
                 if risk > 0:
@@ -480,16 +486,22 @@ def normal(d, tf, sym, st):
     uw, lw = d.h.iloc[-1] - max(p, d.o.iloc[-1]), min(p, d.o.iloc[-1]) - d.l.iloc[-1]
 
     if d.c.iloc[-2] > hi and d.l.iloc[-1] > hi and d.c.iloc[-1] > hi and d.c.iloc[-1] <= hi + chase_atr * a and 1.5 <= vr < 8.0 and uw < real_body_safe * 0.5:
-        sl_c = hi - 0.2 * a
+        if sl_type == "2k":
+            sl_c = min(d.l.iloc[-1], d.l.iloc[-2]) - a
+        else:
+            sl_c = hi - 0.2 * a
         if p > sl_c: add("LONG", "BREAKOUT", sl_c, p + 2.0 * (p - sl_c), 2.0)
     if d.c.iloc[-2] < lo and d.h.iloc[-1] < lo and d.c.iloc[-1] < lo and d.c.iloc[-1] >= lo - chase_atr * a and 1.5 <= vr < 8.0 and lw < real_body_safe * 0.5:
-        sl_c = lo + 0.2 * a
+        if sl_type == "2k":
+            sl_c = max(d.h.iloc[-1], d.h.iloc[-2]) + a
+        else:
+            sl_c = lo + 0.2 * a
         if sl_c > p: add("SHORT", "BREAKOUT", sl_c, p - 2.0 * (sl_c - p), 2.0)
 
     return max(out, key=lambda x: x["score"]) if out else None
 
-def signal(d, tf, sym, st):
-    p, n = prepare(d, tf, sym, st), normal(d, tf, sym, st)
+def signal(d, tf, sym, st, sl_type="wall"):
+    p, n = prepare(d, tf, sym, st, sl_type), normal(d, tf, sym, st, sl_type)
     if p and n: return p if p["score"] >= n["score"] else n
     return p or n
 
@@ -531,7 +543,13 @@ def check_live(st, is_shadow=False):
         if res_status in ("LOSS", "WIN") or bars_since(d, int(s.get("sent_ts") or s.get("anchor") or d.ts.iloc[-1])) >= MAX_HOLD.get(tf, 100):
             if not is_shadow:
                 if res_status in ("LOSS", "WIN"): mark(st, s["sym"], tf, side, typ, d, "cool")
-                rec(st, s, res_status if res_status in ("LOSS", "WIN") else "TIMEOUT", mfe, mfe_pct)
+                
+                _risk = abs(ent - sl) if ent and sl else 0
+                _mae_p = (max(0.0, ent - f.l.min()) if side == "LONG" else max(0.0, f.h.max() - ent)) if _risk > 0 else 0
+                mae = _mae_p / ent if ent else 0
+                mae_pct = _mae_p / _risk if _risk > 0 else 0
+                
+                rec(st, s, res_status if res_status in ("LOSS", "WIN") else "TIMEOUT", mfe, mfe_pct, mae, mae_pct)
             else:
                 _risk = abs(ent - s.get("orig_sl", s.get("sl", 0))) if ent else 0
                 _mae_p = (max(0.0, ent - f.l.min()) if side == "LONG" else max(0.0, f.h.max() - ent)) if _risk > 0 else 0
@@ -561,23 +579,31 @@ def scan():
             if stop: break
             try:
                 dd = candles(sym, bar, n)
-                s = signal(dd, tf, sym, st)
                 
-                if s:
-                    if too_soon(st, s["sym"], tf, s["dir"], s["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s["sym"] and lv.get("tf")==tf for lv in st.get("live", [])): continue
-                    key = sdk(s["sym"], tf, s["dir"], s["type"])
+                # 1. 实盘系统：用历史墙
+                s_live = signal(dd, tf, sym, st, sl_type="wall")
+                if s_live:
+                    if too_soon(st, s_live["sym"], tf, s_live["dir"], s_live["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s_live["sym"] and lv.get("tf")==tf for lv in st.get("live", [])): continue
+                    key = sdk(s_live["sym"], tf, s_live["dir"], s_live["type"])
                     if key in st.get("cool", {}) and bars_since(dd, int(st["cool"][key])) < COOL_BARS: continue
                     
-                    s["sent_ts"] = int(dd.ts.iloc[-1])
-                    hits.append(s)
-
-                    vr = s.get("vr", 1.0)
-                    is_pianke = False
-                    if "PREPARE" in s["type"] and vr < 0.6: is_pianke = True
-                    elif ("TREND" in s["type"] or "BREAKOUT" in s["type"]) and vr < 1.0: is_pianke = True
+                    s_live["sent_ts"] = int(dd.ts.iloc[-1])
+                    hits.append(s_live)
                     
+                    vr = s_live.get("vr", 1.0)
+                    is_pianke = False
+                    if "PREPARE" in s_live["type"] and vr < 0.6: is_pianke = True
+                    elif ("TREND" in s_live["type"] or "BREAKOUT" in s_live["type"]) and vr < 1.0: is_pianke = True
+                    
+                    # 防偏科影子单：用实盘历史墙
                     if not is_pianke:
-                        rec_shadow(st, sym, tf, s["dir"], s["type"], s["entry"], s["sl"], s["tp"], ["防偏科"], dd, s["score"])
+                        rec_shadow(st, sym, tf, s_live["dir"], s_live["type"], s_live["entry"], s_live["sl"], s_live["tp"], ["防偏科"], dd, s_live["score"])
+
+                # 2. 影子系统：用两K止损，独立跑
+                s_shadow = signal(dd, tf, sym, st, sl_type="2k")
+                if s_shadow:
+                    s_shadow["sent_ts"] = int(dd.ts.iloc[-1])
+                    rec_shadow(st, sym, tf, s_shadow["dir"], s_shadow["type"], s_shadow["entry"], s_shadow["sl"], s_shadow["tp"], ["两K止损"], dd, s_shadow["score"])
 
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
