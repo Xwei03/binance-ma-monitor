@@ -374,12 +374,11 @@ def prepare(d, tf, sym, st, sl_type="wall"):
 
         d_e20 = (p - e20.iloc[-1]) / p if side == "LONG" else (e20.iloc[-1] - p) / p
         if d_e20 < 0 or d_e20 > gap_max: continue
-        if abs(e20.iloc[-1] - e60.iloc[-1]) > 1.0 * av or abs(e20.iloc[-1] - e60.iloc[-1]) < 0.1 * av: continue
+        if abs(e20.iloc[-1] - e60.iloc[-1]) > 1.0 * av or abs(e20.iloc[-1] - e60.iloc[-1]) < 0.2 * av: continue
         if (side == "LONG" and e20.iloc[-1] <= e60.iloc[-1]) or (side == "SHORT" and e20.iloc[-1] >= e60.iloc[-1]): continue
-        if (side == "LONG" and (p - e60.iloc[-1]) < 0.5 * av) or (side == "SHORT" and (e60.iloc[-1] - p) < 0.5 * av): continue
         if vr >= 2.0 or ar > 1.6 or body >= .65: continue
         if (side == "LONG" and bs < 0) or (side == "SHORT" and bs > 0): continue
-        if (side == "LONG" and (p < e20.iloc[-1] or e20.iloc[-1] < e20.iloc[-6])) or (side == "SHORT" and (p > e20.iloc[-1] or e20.iloc[-1] > e20.iloc[-6])): continue
+        if (side == "LONG" and (p < e20.iloc[-1] or (e20.iloc[-1] - e20.iloc[-4]) < 0.05 * av)) or (side == "SHORT" and (p > e20.iloc[-1] or (e20.iloc[-4] - e20.iloc[-1]) < 0.05 * av)): continue
         
         s = (18 if ar <= 1.0 else 14 if ar <= 1.2 else 10 if ar <= 1.5 else 6)
         s += (22 if d_e20 <= (.005 if tf=="1H" else .015) else 18 if d_e20 <= (.010 if tf=="1H" else .030) else 12 if d_e20 <= (.020 if tf=="1H" else .060) else 4)
@@ -593,7 +592,6 @@ def scan():
                 s_shadow = signal(dd, tf, sym, st, sl_type="2k")
                 if s_shadow:
                     s_key = sdk(s_shadow["sym"], tf, s_shadow["dir"], s_shadow["type"])
-                    # 影子单必须用 shadow 自己的 cool 和 live 池来判断
                     shadow_already_live = any(x.get("sym")==s_shadow["sym"] and x.get("tf")==tf for x in st.get("shadow", []))
                     shadow_cool_ok = True
                     if s_key in st.get("shadow_cool", {}) and bars_since(dd, int(st["shadow_cool"][s_key])) < COOL_BARS:
