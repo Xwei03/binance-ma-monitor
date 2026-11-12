@@ -150,11 +150,11 @@ def calc_sl(d, tf, p, side, a, sl_type="wall"):
     else:
         if side == "LONG":
             sup = find_swing_levels(d, tf, p, "sup", use_close=False)
-            if not sup: return p - 2.0 * a
+            if not sup: return min(d.l.iloc[-1], d.l.iloc[-2]) - a
             return sup[0][0] - a 
         else:
             res = find_swing_levels(d, tf, p, "res", use_close=False)
-            if not res: return p + 2.0 * a
+            if not res: return max(d.h.iloc[-1], d.h.iloc[-2]) + a
             return res[0][0] + a 
 
 def btc(bar):
@@ -416,7 +416,7 @@ def prepare(d, tf, sym, st, sl_type="wall"):
                             break 
                         
         elif not has_wall and s >= need:
-            tp = p + (2.0 if tf!="1H" else 2.2)*risk if side=="LONG" else p - (2.0 if tf!="1H" else 2.2)*risk
+            tp = p + 2.0 * risk if side=="LONG" else p - 2.0 * risk
             rr = (tp - p) / risk if side == "LONG" else (p - tp) / risk
             if rr >= need_rr:
                 out.append({"sym": sym, "tf": tf, "dir": side, "type": "PREPARE_R", "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr, "anchor": int(d.ts.iloc[-11]), "hi": 0.0, "lo": 0.0, "vr": vr})
@@ -477,7 +477,7 @@ def normal(d, tf, sym, st, sl_type="wall"):
                                     break
                                     
                     if not has_wall:
-                        tp_c = p + 5 * a if side == "LONG" else p - 5 * a
+                        tp_c = p + 2.0 * risk if side == "LONG" else p - 2.0 * risk
                         add(side, "TREND_R", sl_c, tp_c, 1.5)
 
     hi, lo = d.h.iloc[-12:-2].max(), d.l.iloc[-12:-2].min()
