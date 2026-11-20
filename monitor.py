@@ -110,6 +110,7 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     cands = []
     for i in range(n_l, m - n_r):
         if side == "res" and arr_h[i] >= arr_h[i-n_l:i].max() and arr_h[i] >= arr_h[i+1:i+n_r+1].max() and arr_h[i] > p:
+            # 墙的作废严格看收盘价
             if arr_c[i+1:].max() > arr_h[i]: continue
             if use_close and av is not None:
                 wick, body = arr_h[i] - max(arr_o[i], arr_c[i]), abs(arr_c[i] - arr_o[i])
@@ -118,6 +119,7 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
             hits = int(((arr_h > price - price*0.005) & (arr_h < price + price*0.005)).sum())
             cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5, i))
         elif side == "sup" and arr_l[i] <= arr_l[i-n_l:i].min() and arr_l[i] <= arr_l[i+1:i+n_r+1].min() and arr_l[i] < p:
+            # 墙的作废严格看收盘价
             if arr_c[i+1:].min() < arr_l[i]: continue
             if use_close and av is not None:
                 wick, body = min(arr_o[i], arr_c[i]) - arr_l[i], abs(arr_c[i] - arr_o[i])
@@ -146,15 +148,16 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
 
 def calc_sl(d, tf, p, side, a, sl_type="wall"):
     if sl_type == "2k":
-        return min(d.l.iloc[-1], d.l.iloc[-2]) - a if side == "LONG" else max(d.h.iloc[-1], d.h.iloc[-2]) + a
+        # 影子单两K止损垫子加厚到 1.5 ATR
+        return min(d.l.iloc[-1], d.l.iloc[-2]) - 1.5 * a if side == "LONG" else max(d.h.iloc[-1], d.h.iloc[-2]) + 1.5 * a
     else:
         if side == "LONG":
             sup = find_swing_levels(d, tf, p, "sup", use_close=False)
-            if not sup: return min(d.l.iloc[-1], d.l.iloc[-2]) - a
+            if not sup: return min(d.l.iloc[-1], d.l.iloc[-2]) - 1.5 * a
             return sup[0][0] - a 
         else:
             res = find_swing_levels(d, tf, p, "res", use_close=False)
-            if not res: return max(d.h.iloc[-1], d.h.iloc[-2]) + a
+            if not res: return max(d.h.iloc[-1], d.h.iloc[-2]) + 1.5 * a
             return res[0][0] + a 
 
 def btc(bar):
@@ -484,15 +487,16 @@ def normal(d, tf, sym, st, sl_type="wall"):
     real_body = abs(p - d.o.iloc[-1]); real_body_safe = max(real_body, a * 0.01)
     uw, lw = d.h.iloc[-1] - max(p, d.o.iloc[-1]), min(p, d.o.iloc[-1]) - d.l.iloc[-1]
 
-    if d.c.iloc[-2] > hi and d.l.iloc[-1] > hi and d.c.iloc[-1] > hi and d.c.iloc[-1] <= hi + chase_atr * a and 1.5 <= vr < 8.0 and uw < real_body_safe * 0.5:
+    # 突破单实体过滤 + 收盘价过滤
+    if d.c.iloc[-2] > hi and d.l.iloc[-1] > hi and d.c.iloc[-1] > hi and real_body >= 0.2 * a and d.c.iloc[-1] <= hi + chase_atr * a and 1.5 <= vr < 8.0 and uw < real_body_safe * 0.5:
         if sl_type == "2k":
-            sl_c = min(d.l.iloc[-1], d.l.iloc[-2]) - a
+            sl_c = min(d.l.iloc[-1], d.l.iloc[-2]) - 1.5 * a
         else:
             sl_c = hi - 0.2 * a
         if p > sl_c: add("LONG", "BREAKOUT", sl_c, p + 2.0 * (p - sl_c), 2.0)
-    if d.c.iloc[-2] < lo and d.h.iloc[-1] < lo and d.c.iloc[-1] < lo and d.c.iloc[-1] >= lo - chase_atr * a and 1.5 <= vr < 8.0 and lw < real_body_safe * 0.5:
+    if d.c.iloc[-2] < lo and d.h.iloc[-1] < lo and d.c.iloc[-1] < lo and real_body >= 0.2 * a and d.c.iloc[-1] >= lo - chase_atr * a and 1.5 <= vr < 8.0 and lw < real_body_safe * 0.5:
         if sl_type == "2k":
-            sl_c = max(d.h.iloc[-1], d.h.iloc[-2]) + a
+            sl_c = max(d.h.iloc[-1], d.h.iloc[-2]) + 1.5 * a
         else:
             sl_c = lo + 0.2 * a
         if sl_c > p: add("SHORT", "BREAKOUT", sl_c, p - 2.0 * (sl_c - p), 2.0)
