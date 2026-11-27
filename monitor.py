@@ -110,7 +110,6 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     cands = []
     for i in range(n_l, m - n_r):
         if side == "res" and arr_h[i] >= arr_h[i-n_l:i].max() and arr_h[i] >= arr_h[i+1:i+n_r+1].max() and arr_h[i] > p:
-            # 墙的作废严格看收盘价
             if arr_c[i+1:].max() > arr_h[i]: continue
             if use_close and av is not None:
                 wick, body = arr_h[i] - max(arr_o[i], arr_c[i]), abs(arr_c[i] - arr_o[i])
@@ -119,7 +118,6 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
             hits = int(((arr_h > price - price*0.005) & (arr_h < price + price*0.005)).sum())
             cands.append((price, (arr_v[i] / avg_vol) * (1 + (i/m)) + hits * 0.5, i))
         elif side == "sup" and arr_l[i] <= arr_l[i-n_l:i].min() and arr_l[i] <= arr_l[i+1:i+n_r+1].min() and arr_l[i] < p:
-            # 墙的作废严格看收盘价
             if arr_c[i+1:].min() < arr_l[i]: continue
             if use_close and av is not None:
                 wick, body = min(arr_o[i], arr_c[i]) - arr_l[i], abs(arr_c[i] - arr_o[i])
@@ -146,9 +144,8 @@ def find_swing_levels(d, tf, p, side, use_close=True, av=None):
     merged.sort(key=lambda x: -x[2])
     return [(float(price), float(score)) for price, score, _ in merged]
 
-def calc_sl(d, tf, p, side, a, sl_type="wall"):
+def calc_sl(d, tf, p, side, a, sl_type="2k"):
     if sl_type == "2k":
-        # 影子单两K止损垫子加厚到 1.5 ATR
         return min(d.l.iloc[-1], d.l.iloc[-2]) - 1.5 * a if side == "LONG" else max(d.h.iloc[-1], d.h.iloc[-2]) + 1.5 * a
     else:
         if side == "LONG":
@@ -168,6 +165,23 @@ def btc(bar):
     v = 15 if (e20 > e60 and p > e20) else -15 if (e20 < e60 and p < e20) else 0
     btc_cache[bar] = v
     return v
+
+def get_btc_vol_status():
+    try:
+        d4 = candles("BTC-USDT-SWAP", "4H", 100)
+        if d4 is None or len(d4) < 50: return "MID" 
+        a = atr(d4)
+        recent_atr = a.iloc[-30:].dropna()
+        if len(recent_atr) < 20: return "MID"
+        
+        current_atr = recent_atr.iloc[-1]
+        pct_rank = (recent_atr < current_atr).mean()
+        
+        if pct_rank <= 0.35: return "LOW"
+        if pct_rank >= 0.70: return "HIGH"
+        return "MID"
+    except Exception:
+        return "MID"
 
 def h4_filter(sym):
     d4 = candles(sym, "4H", 30)
@@ -357,7 +371,7 @@ def resolve(sym, side, sl, tp, ts0, ts1, tf):
         if r in ("WIN", "LOSS"): return r
     return "UNKNOWN"
 
-def prepare(d, tf, sym, st, sl_type="wall"):
+def prepare(d, tf, sym, st, sl_type="2k", vol_status="MID"):
     if d is None or len(d) < 210: return
     p = d.c.iloc[-1]
     a = atr(d); av = a.iloc[-1]; base = a.iloc[-21:-1].mean()
@@ -388,6 +402,10 @@ def prepare(d, tf, sym, st, sl_type="wall"):
         s += 23 + (14 if (.7 <= vr < 2.0 and vr3 >= 1.0) else 8 if (.6 <= vr < 2.0 and vr3 >= 0.9) else 4)
         s += 8 if ((bs > 0) if side=="LONG" else (bs < 0)) else 4 if bs == 0 else 0
         s += 5 if (body < .35 and ar <= 1) else 3 if body < .45 else 0
+
+        # 低波给埋伏加分
+        if vol_status == "LOW":
+            s += 9
 
         need, need_rr = (73 if tf == "1H" else 72), (1.5 if tf == "1H" else 2.0)
         sl = calc_sl(d, tf, p, side, av, sl_type)
@@ -426,7 +444,7 @@ def prepare(d, tf, sym, st, sl_type="wall"):
             
     return max(out, key=lambda x: x["score"]) if out else None
 
-def normal(d, tf, sym, st, sl_type="wall"):
+def normal(d, tf, sym, st, sl_type="2k", vol_status="MID"):
     if d is None or len(d) < 210: return
     p = d.c.iloc[-1]
     e20s, e60s, e120s = ema(d.c, 20), ema(d.c, 60), ema(d.c, 120)
@@ -444,11 +462,23 @@ def normal(d, tf, sym, st, sl_type="wall"):
         if (side == "LONG" and h4_bias == -1) or (side == "SHORT" and h4_bias == 1): return
         if (side == "LONG" and bs < 0) or (side == "SHORT" and bs > 0): return
         if sl == p or tp == p: return
+        
+        # 低波不碰突破
+        if typ == "BREAKOUT" and vol_status == "LOW":
+            return
+
         rr = (tp - p) / (p - sl) if side == "LONG" else (p - tp) / (sl - p)
         if rr <= 0: return
         v = (5 if vr >= 5 else 15 if vr >= 4 else 25 if vr >= 2.5 else 30 if vr >= 1.5 else 15 if vr >= 1.0 else 5) if "TREND" in typ else (30 if 2 <= vr < 2.5 else 25 if 2.5 <= vr < 3 else 15 if vr >= 3 else 20 if vr >= 1.5 else 10 if vr >= 1.2 else 0)
         s = v + (25 if body >= .6 else 12 if body >= .45 else 0) + (20 if a > aa * 1.05 else 0) + (6 if bs == 0 else min(max(bs if side == "LONG" else -bs, 0), 15))
         if (side == "LONG" and p > e20) or (side == "SHORT" and p < e20): s += 10
+        
+        # 波动率打分
+        if vol_status == "LOW" and "TREND" in typ:
+            s += 5
+        elif vol_status == "HIGH" and "TREND" in typ:
+            s -= 2
+            
         if rr >= need_rr and s >= TF[tf][2]:
             out.append({"sym": sym, "tf": tf, "dir": side, "type": typ, "score": int(s), "entry": p, "sl": sl, "tp": tp, "rr": rr, "vr": vr})
 
@@ -487,7 +517,6 @@ def normal(d, tf, sym, st, sl_type="wall"):
     real_body = abs(p - d.o.iloc[-1]); real_body_safe = max(real_body, a * 0.01)
     uw, lw = d.h.iloc[-1] - max(p, d.o.iloc[-1]), min(p, d.o.iloc[-1]) - d.l.iloc[-1]
 
-    # 突破单实体过滤 + 收盘价过滤
     if d.c.iloc[-2] > hi and d.l.iloc[-1] > hi and d.c.iloc[-1] > hi and real_body >= 0.2 * a and d.c.iloc[-1] <= hi + chase_atr * a and 1.5 <= vr < 8.0 and uw < real_body_safe * 0.5:
         if sl_type == "2k":
             sl_c = min(d.l.iloc[-1], d.l.iloc[-2]) - 1.5 * a
@@ -503,8 +532,8 @@ def normal(d, tf, sym, st, sl_type="wall"):
 
     return max(out, key=lambda x: x["score"]) if out else None
 
-def signal(d, tf, sym, st, sl_type="wall"):
-    p, n = prepare(d, tf, sym, st, sl_type), normal(d, tf, sym, st, sl_type)
+def signal(d, tf, sym, st, sl_type="2k", vol_status="MID"):
+    p, n = prepare(d, tf, sym, st, sl_type, vol_status), normal(d, tf, sym, st, sl_type, vol_status)
     if p and n: return p if p["score"] >= n["score"] else n
     return p or n
 
@@ -575,6 +604,8 @@ def scan():
     ss = coins()
     if not ss: save_state(st); return
 
+    vol_status = get_btc_vol_status()
+
     for tf, (bar, n, _, _) in TF.items():
         if stop or not tf_run(tf): continue
         hits = []
@@ -583,8 +614,8 @@ def scan():
             try:
                 dd = candles(sym, bar, n)
                 
-                # 1. 实盘系统：用历史墙
-                s_live = signal(dd, tf, sym, st, sl_type="wall")
+                # 1. 实盘系统：用纯两K止损，不打分
+                s_live = signal(dd, tf, sym, st, sl_type="2k", vol_status="MID")
                 if s_live:
                     if not (too_soon(st, s_live["sym"], tf, s_live["dir"], s_live["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s_live["sym"] and lv.get("tf")==tf for lv in st.get("live", []))):
                         key = sdk(s_live["sym"], tf, s_live["dir"], s_live["type"])
@@ -592,8 +623,8 @@ def scan():
                             s_live["sent_ts"] = int(dd.ts.iloc[-1])
                             hits.append(s_live)
 
-                # 2. 影子系统：用两K止损，独立跑，条件跟实盘一样
-                s_shadow = signal(dd, tf, sym, st, sl_type="2k")
+                # 2. 影子系统：两K + 波动雷达打分版
+                s_shadow = signal(dd, tf, sym, st, sl_type="2k", vol_status=vol_status)
                 if s_shadow:
                     s_key = sdk(s_shadow["sym"], tf, s_shadow["dir"], s_shadow["type"])
                     shadow_already_live = any(x.get("sym")==s_shadow["sym"] and x.get("tf")==tf for x in st.get("shadow", []))
@@ -603,7 +634,7 @@ def scan():
                         
                     if not shadow_already_live and shadow_cool_ok:
                         s_shadow["sent_ts"] = int(dd.ts.iloc[-1])
-                        rec_shadow(st, sym, tf, s_shadow["dir"], s_shadow["type"], s_shadow["entry"], s_shadow["sl"], s_shadow["tp"], ["两K止损"], dd, s_shadow["score"])
+                        rec_shadow(st, sym, tf, s_shadow["dir"], s_shadow["type"], s_shadow["entry"], s_shadow["sl"], s_shadow["tp"], ["两K波动雷达版"], dd, s_shadow["score"])
 
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
