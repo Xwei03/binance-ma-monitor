@@ -403,7 +403,6 @@ def prepare(d, tf, sym, st, sl_type="2k", vol_status="MID"):
         s += 8 if ((bs > 0) if side=="LONG" else (bs < 0)) else 4 if bs == 0 else 0
         s += 5 if (body < .35 and ar <= 1) else 3 if body < .45 else 0
 
-        # 低波给埋伏加分
         if vol_status == "LOW":
             s += 9
 
@@ -463,7 +462,6 @@ def normal(d, tf, sym, st, sl_type="2k", vol_status="MID"):
         if (side == "LONG" and bs < 0) or (side == "SHORT" and bs > 0): return
         if sl == p or tp == p: return
         
-        # 低波不碰突破
         if typ == "BREAKOUT" and vol_status == "LOW":
             return
 
@@ -473,7 +471,6 @@ def normal(d, tf, sym, st, sl_type="2k", vol_status="MID"):
         s = v + (25 if body >= .6 else 12 if body >= .45 else 0) + (20 if a > aa * 1.05 else 0) + (6 if bs == 0 else min(max(bs if side == "LONG" else -bs, 0), 15))
         if (side == "LONG" and p > e20) or (side == "SHORT" and p < e20): s += 10
         
-        # 波动率打分
         if vol_status == "LOW" and "TREND" in typ:
             s += 5
         elif vol_status == "HIGH" and "TREND" in typ:
@@ -614,7 +611,7 @@ def scan():
             try:
                 dd = candles(sym, bar, n)
                 
-                # 1. 实盘系统：用纯两K止损，不打分
+                # 1. 实盘系统：纯两K
                 s_live = signal(dd, tf, sym, st, sl_type="2k", vol_status="MID")
                 if s_live:
                     if not (too_soon(st, s_live["sym"], tf, s_live["dir"], s_live["type"], dd, DEDUP_BARS) or any(lv.get("sym")==s_live["sym"] and lv.get("tf")==tf for lv in st.get("live", []))):
@@ -623,7 +620,7 @@ def scan():
                             s_live["sent_ts"] = int(dd.ts.iloc[-1])
                             hits.append(s_live)
 
-                # 2. 影子系统：两K + 波动雷达打分版
+                # 2. 影子系统A：两K + 波动雷达打分版
                 s_shadow = signal(dd, tf, sym, st, sl_type="2k", vol_status=vol_status)
                 if s_shadow:
                     s_key = sdk(s_shadow["sym"], tf, s_shadow["dir"], s_shadow["type"])
@@ -635,6 +632,19 @@ def scan():
                     if not shadow_already_live and shadow_cool_ok:
                         s_shadow["sent_ts"] = int(dd.ts.iloc[-1])
                         rec_shadow(st, sym, tf, s_shadow["dir"], s_shadow["type"], s_shadow["entry"], s_shadow["sl"], s_shadow["tp"], ["两K波动雷达版"], dd, s_shadow["score"])
+
+                # 3. 影子系统B：两K + 低波直接一票否决版
+                s_shadow_strict = signal(dd, tf, sym, st, sl_type="2k", vol_status="MID")
+                if s_shadow_strict and vol_status != "LOW":
+                    s_key_strict = sdk(s_shadow_strict["sym"], tf, s_shadow_strict["dir"], s_shadow_strict["type"])
+                    shadow_strict_already_live = any(x.get("sym")==s_shadow_strict["sym"] and x.get("tf")==tf for x in st.get("shadow", []))
+                    shadow_strict_cool_ok = True
+                    if s_key_strict in st.get("shadow_cool", {}) and bars_since(dd, int(st["shadow_cool"][s_key_strict])) < COOL_BARS:
+                        shadow_strict_cool_ok = False
+                        
+                    if not shadow_strict_already_live and shadow_strict_cool_ok:
+                        s_shadow_strict["sent_ts"] = int(dd.ts.iloc[-1])
+                        rec_shadow(st, sym, tf, s_shadow_strict["dir"], s_shadow_strict["type"], s_shadow_strict["entry"], s_shadow_strict["sl"], s_shadow_strict["tp"], ["低波禁发版"], dd, s_shadow_strict["score"])
 
             except Exception as e: log(f"[SCAN] {sym} {tf} {type(e).__name__} {e}")
         
